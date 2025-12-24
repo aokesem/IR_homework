@@ -1,0 +1,41 @@
+# RAG系统配置文件
+
+# 模型配置
+models:
+  # Embedding模型
+  embedding:
+    name: "BAAI/bge-small-zh-v1.5"  
+    device: "cuda" 
+  
+  # LLM模型
+  llm:
+    name: "Qwen/Qwen2-0.5B-Instruct" 
+    # 运行设备配置
+    device: "cuda" 
+    max_new_tokens: 512
+    temperature: 0.7
+    load_in_4bit: false  # 显存足够，0.5B模型不需要量化
+
+# 文档处理配置
+document:
+  chunk_size: 512  # 每个文档块的token数
+  chunk_overlap: 50  # 块之间重叠的token数
+  
+# 检索配置
+retrieval:
+  top_k: 5  # 检索top5个最相关文档
+  score_threshold: 0.3  # 相似度阈值
+
+# 数据路径
+paths:
+  data_dir: "./data"
+  raw_docs: "./data/raw"
+  processed_docs: "./data/processed"
+  vector_store: "./vector_store"
+  models_cache: "./models"
+
+# Web界面配置
+web:
+  host: "127.0.0.1"
+  port: 7860
+  share: false  # 是否生成公共链接

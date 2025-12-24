@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+LLM_env/
+.env
+
+# Project Specific - Data & Artifacts
+# 保留目录结构，但忽略具体数据文件
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# 忽略本地构建的知识库（太大且可重新生成）
+vector_store/
+
+# 忽略本地下载的大模型文件
+models/
+*.bin
+*.pth
+*.pt
+
+# IDE Settings
+.idea/
+.vscode/
+*.swp
+
+# System
+.DS_Store
+Thumbs.db
