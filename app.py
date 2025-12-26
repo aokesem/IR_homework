@@ -157,7 +157,6 @@ class RAGWebApp:
     
     def create_interface(self):
         """创建Gradio界面"""
-        
         with gr.Blocks(title="RAG问答系统", theme=gr.themes.Soft()) as demo:
             gr.Markdown("""
             # 📚 RAG问答系统

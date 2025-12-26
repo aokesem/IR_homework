@@ -12,8 +12,6 @@ from langchain.schema import Document
 
 
 class VectorRetriever:
-    """基于向量的检索器"""
-    
     def __init__(
         self,
         embedding_model_name: str = "BAAI/bge-small-zh-v1.5",
@@ -21,8 +19,6 @@ class VectorRetriever:
         vector_store_path: str = None
     ):
         """
-        初始化检索器
-        
         Args:
             embedding_model_name: Embedding模型名称
             device: 设备（cuda/cpu）
@@ -64,8 +60,6 @@ class VectorRetriever:
     
     def add_documents(self, documents: List[Document]) -> None:
         """
-        向现有索引添加文档
-        
         Args:
             documents: 文档块列表
         """
@@ -83,8 +77,6 @@ class VectorRetriever:
         score_threshold: float = 0.0
     ) -> List[Tuple[Document, float]]:
         """
-        检索相关文档
-        
         Args:
             query: 查询文本
             top_k: 返回top k个结果
@@ -116,8 +108,6 @@ class VectorRetriever:
     
     def save(self, path: str = None) -> None:
         """
-        保存向量数据库
-        
         Args:
             path: 保存路径（可选，默认使用初始化时的路径）
         """
@@ -135,8 +125,6 @@ class VectorRetriever:
     
     def load(self, path: str = None) -> None:
         """
-        加载向量数据库
-        
         Args:
             path: 加载路径（可选，默认使用初始化时的路径）
         """

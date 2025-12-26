@@ -34,7 +34,7 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 
-# 忽略本地构建的知识库（太大且可重新生成）
+# 忽略本地构建的知识库
 vector_store/
 
 # 忽略本地下载的大模型文件
