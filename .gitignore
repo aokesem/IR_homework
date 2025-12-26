@@ -24,8 +24,10 @@ wheels/
 # Virtual Environment
 venv/
 env/
+.venv/
 LLM_env/
 .env
+*.env
 
 # Project Specific - Data & Artifacts
 # 保留目录结构，但忽略具体数据文件
@@ -33,21 +35,34 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/conversations/*
+!data/conversations/.gitkeep
 
 # 忽略本地构建的知识库
 vector_store/
+
+# 评测结果 (Ragas)
+*.csv
+evaluation/results/
 
 # 忽略本地下载的大模型文件
 models/
 *.bin
 *.pth
 *.pt
+*.gguf
+
+# Logs
+*.log
+logs/
 
 # IDE Settings
 .idea/
 .vscode/
 *.swp
+*.swo
 
 # System
 .DS_Store
 Thumbs.db
+desktop.ini

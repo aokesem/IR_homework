@@ -3,6 +3,8 @@
 负责加载、清洗和切分文档
 """
 import os
+import json
+import time
 from typing import List, Dict
 from pathlib import Path
 
@@ -12,20 +14,26 @@ from langchain_community.document_loaders import (
     Docx2txtLoader,
     UnstructuredMarkdownLoader
 )
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+
+
 
 
 class DocumentProcessor:
     """文档处理器"""
     
-    def __init__(self, chunk_size: int = 512, chunk_overlap: int = 50):
+    def __init__(self, chunk_size: int = 512, chunk_overlap: int = 50, processed_dir: str = None):
         """
             chunk_size: 每个文档块的字符数
             chunk_overlap: 块之间重叠的字符数
+            processed_dir: 缓存已解析文档的目录
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.processed_dir = Path(processed_dir) if processed_dir else None
+        if self.processed_dir:
+            self.processed_dir.mkdir(parents=True, exist_ok=True)
         
         # 初始化文本切分器
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -111,6 +119,58 @@ class DocumentProcessor:
         
         return chunks
     
+    def _get_cache_path(self, file_path: str) -> Path:
+        """获取缓存文件路径"""
+        if not self.processed_dir:
+            return None
+        # 使用原文件名 + .json 作为缓存扩展名
+        rel_path = os.path.basename(file_path)
+        return self.processed_dir / f"{rel_path}.json"
+
+    def _save_cache(self, file_path: str, documents: List[Document]):
+        """将解析后的文档保存到缓存"""
+        cache_path = self._get_cache_path(file_path)
+        if not cache_path:
+            return
+            
+        try:
+            # 记录原始内容和修改时间以进行校验
+            mtime = os.path.getmtime(file_path)
+            cache_data = {
+                "file_path": file_path,
+                "mtime": mtime,
+                "documents": [
+                    {"page_content": doc.page_content, "metadata": doc.metadata}
+                    for doc in documents
+                ]
+            }
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"警告: 写入缓存失败 {file_path}: {e}")
+
+    def _load_cache(self, file_path: str) -> List[Document]:
+        """从缓存加载文档"""
+        cache_path = self._get_cache_path(file_path)
+        if not cache_path or not cache_path.exists():
+            return None
+            
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 校验文件是否被修改过
+            if data.get("mtime") != os.path.getmtime(file_path):
+                return None
+                
+            documents = [
+                Document(page_content=d["page_content"], metadata=d["metadata"])
+                for d in data["documents"]
+            ]
+            return documents
+        except Exception:
+            return None
+    
     def clean_text(self, text: str) -> str:
         """
         Args:
@@ -148,10 +208,30 @@ class DocumentProcessor:
         
         print(f"找到 {len(file_paths)} 个文档文件")
         
-        # 加载文档
-        documents = self.load_documents(file_paths)
+        # 加载文档（带有缓存逻辑）
+        documents = []
+        for fp in file_paths:
+            # 尝试从缓存加载
+            cached_docs = self._load_cache(fp)
+            if cached_docs:
+                documents.extend(cached_docs)
+                print(f"🚀 从缓存加载: {os.path.basename(fp)}")
+            else:
+                # 正常解析
+                try:
+                    docs = self._load_single_file(fp)
+                    # 清洗文本
+                    for doc in docs:
+                        doc.page_content = self.clean_text(doc.page_content)
+                    
+                    documents.extend(docs)
+                    # 写入缓存
+                    self._save_cache(fp, docs)
+                    print(f"📂 解析新文件: {os.path.basename(fp)}")
+                except Exception as e:
+                    print(f"✗ 处理失败: {fp}, 错误: {str(e)}")
         
-        # 切分文档
+        # 统一进行文档切分
         chunks = self.split_documents(documents)
         
         return chunks

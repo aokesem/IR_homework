@@ -6,9 +6,9 @@ import os
 from typing import List, Dict, Tuple
 import numpy as np
 
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 
 class VectorRetriever:
@@ -16,19 +16,27 @@ class VectorRetriever:
         self,
         embedding_model_name: str = "BAAI/bge-small-zh-v1.5",
         device: str = "cuda",
-        vector_store_path: str = None
+        vector_store_path: str = None,
+        dummy: bool = False
     ):
         """
         Args:
             embedding_model_name: Embedding模型名称
             device: 设备（cuda/cpu）
             vector_store_path: 向量数据库保存路径
+            dummy: 是否开启虚拟模式
         """
         self.embedding_model_name = embedding_model_name
         self.device = device
         self.vector_store_path = vector_store_path
         self.vector_store = None
+        self.dummy = dummy
         
+        if dummy:
+            print(f"⚠️ 虚拟模式：跳过加载Embedding模型 {embedding_model_name}")
+            self.embeddings = None
+            return
+
         # 初始化embedding模型
         print(f"正在加载Embedding模型: {embedding_model_name}")
         self.embeddings = HuggingFaceEmbeddings(
@@ -85,6 +93,12 @@ class VectorRetriever:
         Returns:
             (文档, 相似度分数) 列表
         """
+        if self.dummy:
+            return [
+                (Document(page_content=f"这是来自虚拟知识库的参考内容1...", metadata={"file_name": "dummy_doc1.pdf"}), 0.95),
+                (Document(page_content=f"这是针对问题 '{query}' 的虚拟检索结果2...", metadata={"file_name": "dummy_doc2.txt"}), 0.88)
+            ]
+
         if self.vector_store is None:
             raise ValueError("向量索引尚未构建，请先调用build_index()")
         
@@ -139,10 +153,34 @@ class VectorRetriever:
         print(f"正在加载向量数据库: {load_path}")
         self.vector_store = FAISS.load_local(
             load_path,
-            embeddings=self.embeddings
+            embeddings=self.embeddings,
+            allow_dangerous_deserialization=True
         )
         print("✓ 向量数据库加载完成")
     
+    def get_all_sources(self) -> List[Dict]:
+        """
+        获取当前向量库中所有唯一的源文件名及其切片数量
+        """
+        if self.vector_store is None:
+            return []
+            
+        source_counts = {}
+        # 通过访问 FAISS 的 docstore 获取所有存储的文档
+        try:
+            # Note: 访问私有属性 _dict 是因为 langchain 的 FAISS 包装没有提供直接列出所有文档的公共 API
+            for doc_id, doc in self.vector_store.docstore._dict.items():
+                source = doc.metadata.get('file_name', '未知文件')
+                source_counts[source] = source_counts.get(source, 0) + 1
+        except Exception as e:
+            print(f"获取来源列表失败: {e}")
+            return []
+            
+        return [
+            {"file_name": name, "chunk_count": count}
+            for name, count in source_counts.items()
+        ]
+
     def get_stats(self) -> Dict:
         """
         获取检索器统计信息

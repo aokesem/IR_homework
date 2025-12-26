@@ -33,9 +33,16 @@ paths:
   processed_docs: "./data/processed"
   vector_store: "./vector_store"
   models_cache: "./models"
+  conversations: "./data/conversations"
 
 # Web界面配置
 web:
   host: "127.0.0.1"
   port: 7860
   share: false  # 是否生成公共链接
+# 评测配置 (Ragas)
+evaluation:
+  api:
+    base_url: "https://tb.api.mkeai.com/v1"
+    api_key: "sk-ipf4pyozQpL905IkkcEe0nycy1r1xEr0oYSAgpf7IW9o0F6b"
+    model: "deepseek-r1-0528"

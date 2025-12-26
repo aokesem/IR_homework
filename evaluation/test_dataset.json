@@ -1,0 +1,14 @@
+[
+    {
+        "question": "什么是信息检索？",
+        "ground_truth": "信息检索是从大规模非结构化集合中寻找满足信息需求的材料（通常是文档）的过程。"
+    },
+    {
+        "question": "RAG系统的全称是什么？",
+        "ground_truth": "RAG的全称是Retrieval-Augmented Generation，即检索增强生成。"
+    },
+    {
+        "question": "在RAG中，向量数据库的主要作用是什么？",
+        "ground_truth": "向量数据库主要用于存储文档的向量化表示，并基于相似度计算实现快速的相关文档检索。"
+    }
+]

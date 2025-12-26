@@ -5,7 +5,7 @@
 from typing import List, Dict
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 
 class LLMGenerator:
@@ -32,7 +32,8 @@ class LLMGenerator:
         device: str = "cuda",
         load_in_4bit: bool = True,
         max_new_tokens: int = 512,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        dummy: bool = False
     ):
         """
         初始化生成器
@@ -43,12 +44,20 @@ class LLMGenerator:
             load_in_4bit: 是否使用4bit量化
             max_new_tokens: 最大生成token数
             temperature: 生成温度
+            dummy: 是否开启虚拟模式（不加载模型）
         """
         self.model_name = model_name
         self.device = device
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
+        self.dummy = dummy
         
+        if dummy:
+            print(f"⚠️ 虚拟模式：跳过加载LLM模型 {model_name}")
+            self.tokenizer = None
+            self.model = None
+            return
+            
         print(f"正在加载LLM模型: {model_name}")
         
         # 配置量化（节省显存）
@@ -113,6 +122,7 @@ class LLMGenerator:
         self,
         question: str,
         context_documents: List[Document],
+        history: List[List[str]] = None,
         custom_prompt: str = None
     ) -> Dict[str, any]:
         """
@@ -121,17 +131,26 @@ class LLMGenerator:
         Args:
             question: 用户问题
             context_documents: 上下文文档列表
+            history: 对话历史 [[user_msg, bot_msg], ...]
             custom_prompt: 自定义prompt模板（可选）
             
         Returns:
             包含答案和元信息的字典
         """
+        if self.dummy:
+            return {
+                "answer": f"【虚拟回答】这是一个模拟生成的答案。当前处于开发模式，已跳过真实的模型推理过程。您提问的问题是：\"{question}\"",
+                "question": question,
+                "num_sources": len(context_documents),
+                "model": f"{self.model_name} (Dummy)"
+            }
+
         # 构建上下文
         context = self.build_context(context_documents)
         
-        # 构建完整prompt
+        # 构建当前问题的完整prompt（带参考资料）
         prompt_template = custom_prompt or self.PROMPT_TEMPLATE
-        prompt = prompt_template.format(
+        current_prompt = prompt_template.format(
             context=context,
             question=question
         )
@@ -140,11 +159,23 @@ class LLMGenerator:
         is_instruct_model = "Instruct" in self.model_name or "instruct" in self.model_name or "Chat" in self.model_name
         
         if is_instruct_model:
-            # Instruct模型：使用chat模板
+            # Instruct模型：构建消息列表
             try:
-                messages = [
-                    {"role": "user", "content": prompt}
-                ]
+                messages = []
+                # 添加历史记录
+                if history and len(history) > 0:
+                    # 如果 history 已经是 OpenAI 格式 (list of dicts)，直接添加
+                    if isinstance(history[0], dict):
+                        messages.extend(history)
+                    else:
+                        # 兼容旧的 List[List[str]] 格式
+                        for old_question, old_answer in history:
+                            messages.append({"role": "user", "content": old_question})
+                            messages.append({"role": "assistant", "content": old_answer})
+                
+                # 添加当前带上下文的问题
+                messages.append({"role": "user", "content": current_prompt})
+                
                 text = self.tokenizer.apply_chat_template(
                     messages,
                     tokenize=False,
@@ -152,10 +183,20 @@ class LLMGenerator:
                 )
             except Exception as e:
                 print(f"警告: chat模板应用失败，使用直接输入: {e}")
-                text = prompt
+                text = current_prompt
         else:
-            # 基础模型：直接使用prompt
-            text = prompt
+            # 基础模型：将历史拼接在最前面
+            history_text = ""
+            if history:
+                if isinstance(history[0], dict):
+                    for msg in history:
+                        role_name = "用户" if msg["role"] == "user" else "助手"
+                        history_text += f"{role_name}：{msg['content']}\n\n"
+                else:
+                    for old_question, old_answer in history:
+                        history_text += f"用户问题：{old_question}\n回答：{old_answer}\n\n"
+            
+            text = history_text + current_prompt
         
         # Tokenize
         inputs = self.tokenizer(

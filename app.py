@@ -6,6 +6,10 @@ import gradio as gr
 import os
 import sys
 from pathlib import Path
+from typing import List, Tuple, Dict
+import json
+import time
+from datetime import datetime
 
 # 添加src目录到Python路径
 sys.path.append(str(Path(__file__).parent / "src"))
@@ -23,51 +27,134 @@ class RAGWebApp:
         Args:
             config_path: 配置文件路径
         """
-        print("正在初始化RAG系统...")
-        self.rag_system = RAGSystem(config_path)
+        # 环境变量控制虚拟模式
+        dummy_mode = os.environ.get("RAG_DEV_MODE", "False").lower() == "true"
+        self.rag_system = RAGSystem(config_path, dummy_mode=dummy_mode)
         
-        # 尝试加载已有知识库
-        vector_store_path = self.rag_system.config['paths']['vector_store']
-        if os.path.exists(vector_store_path):
-            try:
-                self.rag_system.load_knowledge_base()
-                self.kb_loaded = True
-            except Exception as e:
-                print(f"加载知识库失败: {e}")
-                self.kb_loaded = False
+        # 尝试加载已有知识库 (虚拟模式下跳过)
+        self.kb_loaded = False
+        if not dummy_mode:
+            vector_store_path = self.rag_system.config['paths']['vector_store']
+            if os.path.exists(vector_store_path):
+                try:
+                    self.rag_system.load_knowledge_base()
+                    self.kb_loaded = True
+                except Exception as e:
+                    print(f"加载知识库失败: {e}")
         else:
-            self.kb_loaded = False
-    
-    def answer_question(self, question: str, top_k: int = 5) -> tuple:
-        """
-        回答问题
-        
-        Args:
-            question: 用户问题
-            top_k: 检索文档数量
+            self.kb_loaded = True # 虚拟模式假装加载了
             
-        Returns:
-            (答案, 来源文档)
+        # 对话保存路径
+        self.conv_dir = Path(self.rag_system.config['paths'].get('conversations', "data/conversations"))
+        self.conv_dir.mkdir(parents=True, exist_ok=True)
+        self.current_chat_file = None
+
+    def answer_question(self,question: str,
+    history: list,
+    top_k: int = 5,
+    custom_prompt: str = None):
         """
+        回答问题（支持多轮对话、来源绑定及自定义 Prompt）
+        """
+
         if not self.kb_loaded:
-            return "⚠️ 知识库尚未构建，请先上传文档", ""
-        
-        if not question.strip():
-            return "请输入问题", ""
-        
-        # 查询
-        result = self.rag_system.query(question, top_k=top_k)
-        
-        # 格式化答案
-        answer = result['answer']
-        
-        # 格式化来源
-        sources_text = f"**使用了 {result['num_sources']} 个参考资料**\n\n"
-        for i, source in enumerate(result.get('sources', []), 1):
-            sources_text += f"**[资料{i}]** {source['file_name']} (相似度: {source['similarity']})\n"
-            sources_text += f"> {source['content']}\n\n"
-        
-        return answer, sources_text
+            history.append({"role": "user", "content": question})
+            history.append({"role": "assistant", "content": "⚠️ 知识库尚未构建，请先上传文档或重建库"})
+        else:
+            # 查询 RAG
+            result = self.rag_system.query(
+                question,
+                top_k=top_k,
+                history=history,
+                custom_prompt=custom_prompt
+            )
+
+            # 构造来源 HTML
+            sources_html = f"\n\n<details><summary>📑 查看 {result['num_sources']} 个参考来源</summary>\n\n"
+            for i, source in enumerate(result.get('sources', []), 1):
+                sources_html += f"**[资料{i}]** {source['file_name']} (相似度: {source['similarity'] or 'N/A'})\n"
+                sources_html += f"> {source['content']}\n\n"
+            sources_html += "</details>"
+
+            full_answer = result["answer"] + sources_html
+
+            # 按顺序入账
+            history.append({"role": "user", "content": question})
+            history.append({"role": "assistant", "content": full_answer})
+            self.save_chat(history)
+            
+        return history, "", gr.update(choices=self.list_chats())
+    
+    def save_chat(self, history: list):
+        """保存对话历史到 JSON（messages 格式）"""
+        if not history:
+            return
+
+        if not self.current_chat_file:
+            # 找第一条 user 消息作为文件名
+            first_q = "chat"
+            for msg in history:
+                if msg.get("role") == "user":
+                    first_q = msg["content"]
+                    break
+
+            safe_first_q = (
+                first_q[:15]
+                .replace(" ", "_")
+                .replace("?", "")
+                .replace("/", "")
+            )
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.current_chat_file = f"chat_{timestamp}_{safe_first_q}.json"
+
+        filepath = self.conv_dir / self.current_chat_file
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "history": history,
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+            
+    def list_chats(self) -> List[str]:
+        """列出所有保存的对话"""
+        chats = list(self.conv_dir.glob("*.json"))
+        # 按修改时间排序（最新的在前）
+        chats.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        return [c.name for c in chats]
+
+    def load_chat(self, filename: str) -> tuple:
+        """从JSON加载对话"""
+        if not filename:
+            return [], "", gr.update()
+            
+        self.current_chat_file = filename
+        filepath = self.conv_dir / filename
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                history = data['history']
+                return history, f"✅ 已载入对话: {filename}", gr.update(value=filename)
+        except Exception as e:
+            return [], f"❌ 载入失败: {str(e)}", gr.update()
+
+    def handle_clear(self):
+        """处理清空对话"""
+        self.current_chat_file = None
+        return [], "", gr.update(value=None)
+
+    def refresh_kb_list(self):
+        """获取并格式化知识库文档列表"""
+        if not self.kb_loaded:
+            return []
+        sources = self.rag_system.get_knowledge_base_sources()
+        # 转换为 DataFrame 格式需要的列表
+        return [[s['file_name'], s['chunk_count']] for s in sources]
     
     def build_kb_from_directory(self, progress=gr.Progress()):
         """从data/raw目录构建知识库"""
@@ -155,103 +242,163 @@ class RAGWebApp:
         
         return text
     
+
+
     def create_interface(self):
-        """创建Gradio界面"""
-        with gr.Blocks(title="RAG问答系统", theme=gr.themes.Soft()) as demo:
-            gr.Markdown("""
-            # 📚 RAG问答系统
-            ### 基于检索增强生成的智能问答助手
-            """)
+        """三栏布局 (修正版：移除不兼容参数，恢复浏览器原生滚动条)"""
+        
+        # 1. 定义 CSS：
+        # - 删除了 .gradio-container 的高度限制，让页面可以自由滚动
+        # - 给聊天框一个固定高度，防止它一开始太小或无限拉长
+        self.custom_css = """
+        /* 聊天框设置固定高度，内部可滚动，外部也可以随页面滚动 */
+        #chat-main { 
+            height: 700px !important; 
+            overflow-y: auto; 
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background-color: #f9fafb;
+        }
+        
+        /* 底部输入框稍微美化一下 */
+        #input-row { 
+            margin-top: 10px;
+        }
+        
+        /* 限制一下知识库表格的高度，防止它太长把页面撑得过长 */
+        #kb-table { 
+            max-height: 300px !important; 
+            overflow-y: auto; 
+        }
+        
+        /* 隐藏掉不需要的页脚 */
+        footer { visibility: hidden !important; }
+        """
+
+        with gr.Blocks(title="RAG 智能助手") as demo:
             
-            with gr.Tabs():
-                # Tab 1: 问答
-                with gr.Tab("💬 问答"):
-                    with gr.Row():
-                        with gr.Column(scale=2):
-                            question_input = gr.Textbox(
-                                label="输入问题",
-                                placeholder="例如：什么是信息检索？",
-                                lines=2
-                            )
-                            top_k_slider = gr.Slider(
-                                minimum=1,
-                                maximum=10,
-                                value=5,
-                                step=1,
-                                label="检索文档数量 (Top-K)"
-                            )
-                            submit_btn = gr.Button("🔍 提交问题", variant="primary", size="lg")
-                        
-                    with gr.Row():
-                        with gr.Column():
-                            answer_output = gr.Textbox(
-                                label="📝 答案",
-                                lines=5,
-                                interactive=False
-                            )
-                        
-                    with gr.Accordion("📑 参考来源", open=False):
-                        sources_output = gr.Markdown()
-                    
-                    # 示例问题
-                    gr.Examples(
-                        examples=[
-                            ["什么是信息检索？"],
-                            ["RAG的主要优势是什么？"],
-                            ["如何评估检索系统的性能？"],
-                        ],
-                        inputs=question_input
-                    )
+            with gr.Row():
                 
-                # Tab 2: 文档管理
-                with gr.Tab("📁 文档管理"):
-                    gr.Markdown("### 上传文档到知识库")
-                    gr.Markdown("支持格式: PDF, TXT, DOCX, Markdown")
+                # ================= 左侧：历史 & 文件 (20%) =================
+                with gr.Column(scale=2, min_width=250):
+                    gr.Markdown("### 🗂️ 历史与文件")
+                    
+                    # 历史记录
+                    with gr.Group():
+                        with gr.Row():
+                            new_chat_btn = gr.Button("➕ 新对话", variant="primary", size="sm")
+                            refresh_chats_btn = gr.Button("🔄", size="sm", scale=0)
+                        
+                        chat_selector = gr.Dropdown(
+                            label="历史记录",
+                            choices=self.list_chats(),
+                            interactive=True,
+                            allow_custom_value=True,
+                            container=False
+                        )
+
+                    gr.Markdown("---")
+                    
+                    # 知识库管理
+                    gr.Markdown("#### 📁 知识库")
+                    file_upload = gr.File(
+                        label="上传文件",
+                        file_count="multiple",
+                        file_types=[".pdf", ".txt", ".docx", ".md"]
+                    )
                     
                     with gr.Row():
-                        file_upload = gr.File(
-                            label="选择文件",
-                            file_count="multiple",
-                            file_types=[".pdf", ".txt", ".docx", ".md"]
+                        upload_btn = gr.Button("📤 上传", size="sm")
+                        build_btn = gr.Button("🔨 重建库", size="sm")
+                    
+                    upload_status = gr.Textbox(show_label=False, placeholder="等待操作...", interactive=False, lines=1)
+                    
+                    kb_table = gr.Dataframe(
+                        headers=["文件名", "切片"],
+                        datatype=["str", "number"],
+                        value=self.refresh_kb_list(),
+                        interactive=False,
+                        elem_id="kb-table",
+                        wrap=True
+                    )
+                    refresh_kb_btn = gr.Button("🔄 刷新列表", size="sm")
+
+
+                # ================= 中间：核心对话区 (60%) =================
+                with gr.Column(scale=6):
+                    # 聊天框
+                    # 修正点：移除了 show_copy_button 参数
+                    chatbot = gr.Chatbot(
+                        label=None,
+                        show_label=False,
+                        elem_id="chat-main"
+                    )
+                    
+                    # 输入区
+                    with gr.Row(elem_id="input-row"):
+                        question_input = gr.Textbox(
+                            show_label=False,
+                            placeholder="输入您的问题... (Shift+Enter 换行)",
+                            scale=8,
+                            lines=1,
+                            max_lines=10,
+                            autofocus=True,
+                            container=False
+                        )
+                        submit_btn = gr.Button("发送", variant="primary", scale=1, min_width=60)
+
+
+                # ================= 右侧：设置 & 信息 (20%) =================
+                with gr.Column(scale=2, min_width=250):
+                    gr.Markdown("### ⚙️ 设置与监控")
+                    
+                    # 参数设置
+                    with gr.Group():
+                        gr.Markdown("#### 检索设置")
+                        top_k_slider = gr.Slider(
+                            minimum=1, maximum=10, value=5, step=1, 
+                            label="Top-K"
                         )
                     
-                    with gr.Row():
-                        upload_btn = gr.Button("📤 上传并添加到知识库", variant="primary")
-                        build_btn = gr.Button("🔨 从data/raw目录构建知识库", variant="secondary")
-                    
-                    upload_status = gr.Textbox(label="状态", interactive=False)
-                
-                # Tab 3: 系统信息
-                with gr.Tab("ℹ️ 系统信息"):
-                    info_output = gr.Markdown()
-                    refresh_btn = gr.Button("🔄 刷新信息")
-                    
-                    # 自动显示信息
-                    demo.load(self.get_system_info, outputs=info_output)
+                    with gr.Accordion("📝 Prompt 设置", open=True):
+                        prompt_input = gr.Textbox(
+                            show_label=False,
+                            value=self.rag_system.generator.PROMPT_TEMPLATE,
+                            lines=10,
+                            placeholder="System Prompt..."
+                        )
+                        reset_prompt_btn = gr.Button("恢复默认", size="sm")
+
+                    gr.Markdown("---")
+
+                    # 系统信息
+                    gr.Markdown("#### ℹ️ 系统状态")
+                    info_output = gr.Markdown(elem_id="sys_info")
+                    refresh_info_btn = gr.Button("刷新状态", size="sm")
+
+            # ================= 事件绑定逻辑 (保持不变) =================
+            new_chat_btn.click(fn=self.handle_clear, outputs=[chatbot, question_input, chat_selector])
+
+            submit_triggers = [question_input.submit, submit_btn.click]
+            for trigger in submit_triggers:
+                trigger(
+                    fn=self.answer_question,
+                    inputs=[question_input, chatbot, top_k_slider, prompt_input],
+                    outputs=[chatbot, question_input, chat_selector]
+                )
+
+            reset_prompt_btn.click(fn=lambda: self.rag_system.generator.PROMPT_TEMPLATE, outputs=prompt_input)
             
-            # 事件绑定
-            submit_btn.click(
-                fn=self.answer_question,
-                inputs=[question_input, top_k_slider],
-                outputs=[answer_output, sources_output]
-            )
+            chat_selector.change(fn=self.load_chat, inputs=chat_selector, outputs=[chatbot, upload_status, chat_selector])
+            refresh_chats_btn.click(fn=lambda: gr.update(choices=self.list_chats()), outputs=chat_selector)
+
+            upload_btn.click(fn=self.upload_files, inputs=file_upload, outputs=upload_status).then(fn=self.refresh_kb_list, outputs=kb_table)
+            build_btn.click(fn=self.build_kb_from_directory, outputs=upload_status).then(fn=self.refresh_kb_list, outputs=kb_table)
+            refresh_kb_btn.click(fn=self.refresh_kb_list, outputs=kb_table)
             
-            upload_btn.click(
-                fn=self.upload_files,
-                inputs=file_upload,
-                outputs=upload_status
-            )
-            
-            build_btn.click(
-                fn=self.build_kb_from_directory,
-                outputs=upload_status
-            )
-            
-            refresh_btn.click(
-                fn=self.get_system_info,
-                outputs=info_output
-            )
-        
+            demo.load(self.get_system_info, outputs=info_output)
+            refresh_info_btn.click(fn=self.get_system_info, outputs=info_output)
+
         return demo
 
 
@@ -268,7 +415,9 @@ def main():
     demo.launch(
         server_name=web_config['host'],
         server_port=web_config['port'],
-        share=web_config['share']
+        share=web_config['share'],
+        theme=gr.themes.Soft(),
+        css=app.custom_css
     )
 
 

@@ -9,19 +9,21 @@ from pathlib import Path
 from document_processor import DocumentProcessor
 from retriever import VectorRetriever
 from generator import LLMGenerator
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 
 class RAGSystem:
     """RAG问答系统"""
     
-    def __init__(self, config_path: str = "../config.yaml"):
+    def __init__(self, config_path: str = "../config.yaml", dummy_mode: bool = False):
         """
         初始化RAG系统
         
         Args:
             config_path: 配置文件路径
+            dummy_mode: 是否开启虚拟模式
         """
+        self.dummy_mode = dummy_mode
         # 加载配置
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
@@ -42,7 +44,8 @@ class RAGSystem:
         doc_config = self.config['document']
         self.doc_processor = DocumentProcessor(
             chunk_size=doc_config['chunk_size'],
-            chunk_overlap=doc_config['chunk_overlap']
+            chunk_overlap=doc_config['chunk_overlap'],
+            processed_dir=self.config['paths'].get('processed_docs')
         )
     
     def _init_retriever(self):
@@ -53,7 +56,8 @@ class RAGSystem:
         self.retriever = VectorRetriever(
             embedding_model_name=model_config['name'],
             device=model_config['device'],
-            vector_store_path=paths_config['vector_store']
+            vector_store_path=paths_config['vector_store'],
+            dummy=self.dummy_mode
         )
     
     def _init_generator(self):
@@ -65,7 +69,8 @@ class RAGSystem:
             device=llm_config['device'],
             load_in_4bit=llm_config.get('load_in_4bit', True),
             max_new_tokens=llm_config['max_new_tokens'],
-            temperature=llm_config['temperature']
+            temperature=llm_config['temperature'],
+            dummy=self.dummy_mode
         )
     
     def build_knowledge_base(self, document_dir: str = None) -> None:
@@ -128,6 +133,8 @@ class RAGSystem:
         self,
         question: str,
         top_k: int = None,
+        history: List[List[str]] = None,
+        custom_prompt: str = None,
         return_sources: bool = True
     ) -> Dict:
         """
@@ -136,6 +143,8 @@ class RAGSystem:
         Args:
             question: 用户问题
             top_k: 检索top k个文档（默认使用配置）
+            history: 对话历史 [[user_msg, bot_msg], ...]
+            custom_prompt: 自定义 Prompt 模板
             return_sources: 是否返回来源文档
             
         Returns:
@@ -162,7 +171,9 @@ class RAGSystem:
         # 2. 生成答案
         result = self.generator.generate(
             question=question,
-            context_documents=retrieved_docs
+            context_documents=retrieved_docs,
+            history=history,
+            custom_prompt=custom_prompt
         )
         
         # 3. 整理返回结果
@@ -184,6 +195,10 @@ class RAGSystem:
             response['sources'] = sources
         
         return response
+    
+    def get_knowledge_base_sources(self) -> List[Dict]:
+        """获取当前知识库中的文档列表及统计信息"""
+        return self.retriever.get_all_sources()
     
     def get_system_info(self) -> Dict:
         """

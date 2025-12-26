@@ -24,3 +24,7 @@ gradio==4.16.0
 numpy==1.24.3
 pyyaml==6.0.1
 tqdm==4.66.1
+openai
+ragas
+datasets
+langchain-openai
