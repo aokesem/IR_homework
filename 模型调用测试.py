@@ -6,9 +6,9 @@ response = client.chat.completions.create(
     model="deepseek-r1-0528", # 可以替换为其他可用模型
     messages=[
         {"role": "system", "content": "You are a helpful assistant"},
-        {"role": "user", "content": "你好，你能为我生成一首很美的诗吗"},
+        {"role": "user", "content": "你好，你是谁"},
     ],
-    stream=True
+    stream=False
 )
 
 print(response.choices[0].message.content)

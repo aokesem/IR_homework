@@ -226,7 +226,7 @@ class RAGWebApp:
         
         text = "### 系统配置\n\n"
         text += f"**Embedding模型**: {info['retriever']['embedding_model']}\n"
-        text += f"**LLM模型**: {info['generator']['model_name']}\n"
+        text += f"**LLM模型**: {info['generator']['model_name']} ({info['generator'].get('provider', 'huggingface')})\n"
         text += f"**设备**: {info['generator']['device']}\n\n"
         
         text += "### 文档处理\n\n"
@@ -239,8 +239,26 @@ class RAGWebApp:
             text += f"**文档块数量**: {info['retriever']['document_count']}\n"
         else:
             text += f"**状态**: ⚠️ 未加载\n"
-        
         return text
+    
+    def get_available_models(self) -> List[Tuple[str, str]]:
+        """获取所有可用模型 (name as display, id as value)"""
+        models = self.rag_system.config['models'].get('available_models', [])
+        # 返回格式: [(Description, Value), ...]
+        # Value format: "provider:model_name"
+        return [(f"{m['desc']} ({m['provider']})", f"{m['provider']}:{m['name']}") for m in models]
+
+    def handle_model_change(self, selected_value: str):
+        """处理模型切换"""
+        if not selected_value:
+            return "❌ 无效选择", self.get_system_info()
+            
+        try:
+            provider, model_name = selected_value.split(":", 1)
+            msg = self.rag_system.reload_generator(model_name, provider)
+            return msg, self.get_system_info()
+        except Exception as e:
+            return f"❌ 切换失败: {e}", self.get_system_info()
     
 
 
@@ -370,6 +388,28 @@ class RAGWebApp:
                         reset_prompt_btn = gr.Button("恢复默认", size="sm")
 
                     gr.Markdown("---")
+                    
+                    # 模型选择
+                    gr.Markdown("#### 🤖 模型切换")
+                    
+                    # 获取当前模型作为默认值
+                    current_llm = self.rag_system.config['models']['llm']
+                    current_provider = current_llm.get('provider', 'huggingface')
+                    if current_provider == 'ollama':
+                         current_val = f"ollama:{current_llm.get('ollama', {}).get('model', '')}"
+                    else:
+                         current_val = f"huggingface:{current_llm.get('name', '')}"
+
+                    model_dropdown = gr.Dropdown(
+                        label="选择模型",
+                        choices=self.get_available_models(),
+                        value=current_val,
+                        interactive=True,
+                        container=False
+                    )
+                    model_status = gr.Textbox(show_label=False, placeholder="模型状态...", lines=1, interactive=False)
+
+                    gr.Markdown("---")
 
                     # 系统信息
                     gr.Markdown("#### ℹ️ 系统状态")
@@ -395,6 +435,15 @@ class RAGWebApp:
             upload_btn.click(fn=self.upload_files, inputs=file_upload, outputs=upload_status).then(fn=self.refresh_kb_list, outputs=kb_table)
             build_btn.click(fn=self.build_kb_from_directory, outputs=upload_status).then(fn=self.refresh_kb_list, outputs=kb_table)
             refresh_kb_btn.click(fn=self.refresh_kb_list, outputs=kb_table)
+            
+            build_btn.click(fn=self.build_kb_from_directory, outputs=upload_status).then(fn=self.refresh_kb_list, outputs=kb_table)
+            refresh_kb_btn.click(fn=self.refresh_kb_list, outputs=kb_table)
+            
+            model_dropdown.change(
+                fn=self.handle_model_change,
+                inputs=model_dropdown,
+                outputs=[model_status, info_output]
+            )
             
             demo.load(self.get_system_info, outputs=info_output)
             refresh_info_btn.click(fn=self.get_system_info, outputs=info_output)

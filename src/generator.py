@@ -3,6 +3,8 @@
 负责使用LLM生成答案
 """
 from typing import List, Dict
+import json
+import requests
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from langchain_core.documents import Document
@@ -33,29 +35,48 @@ class LLMGenerator:
         load_in_4bit: bool = True,
         max_new_tokens: int = 512,
         temperature: float = 0.7,
-        dummy: bool = False
+        dummy: bool = False,
+        provider: str = "huggingface",
+        ollama_url: str = "http://localhost:11434"
     ):
         """
         初始化生成器
         
         Args:
-            model_name: 模型名称
+            model_name: 模型名称 (HF path or Ollama model name)
             device: 设备（cuda/cpu）
             load_in_4bit: 是否使用4bit量化
             max_new_tokens: 最大生成token数
             temperature: 生成温度
             dummy: 是否开启虚拟模式（不加载模型）
+            provider: 模型提供商 ("huggingface" or "ollama")
+            ollama_url: Ollama API URL
         """
         self.model_name = model_name
         self.device = device
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
         self.dummy = dummy
+        self.provider = provider
+        self.ollama_url = ollama_url
         
         if dummy:
-            print(f"⚠️ 虚拟模式：跳过加载LLM模型 {model_name}")
+            print(f"⚠️ 虚拟模式：跳过加载LLM模型 {model_name} ({provider})")
             self.tokenizer = None
             self.model = None
+            return
+            
+        if self.provider == "ollama":
+            print(f"Using Ollama provider: {model_name} at {ollama_url}")
+            # Ollama 不需要加载本地模型权重
+            self.tokenizer = None
+            self.model = None
+            # 测试连接
+            try:
+                requests.get(f"{self.ollama_url}/api/tags")
+                print(f"✓ Ollama 服务连接成功")
+            except Exception as e:
+                print(f"⚠️ 警告: 无法连接到 Ollama 服务: {e}")
             return
             
         print(f"正在加载LLM模型: {model_name}")
@@ -148,6 +169,80 @@ class LLMGenerator:
         # 构建上下文
         context = self.build_context(context_documents)
         
+        # Dispatch based on provider
+        if self.provider == "ollama":
+            return self._generate_ollama(question, context, history, custom_prompt)
+        else:
+            return self._generate_hf(question, context, history, custom_prompt)
+
+    def _generate_ollama(
+        self,
+        question: str,
+        context: str,
+        history: List[List[str]],
+        custom_prompt: str
+    ) -> Dict[str, any]:
+        """使用 Ollama API 生成"""
+        # 构建当前问题的完整prompt
+        prompt_template = custom_prompt or self.PROMPT_TEMPLATE
+        current_prompt = prompt_template.format(
+            context=context,
+            question=question
+        )
+        
+        # 构建 messages
+        messages = []
+        if history:
+            if isinstance(history[0], dict):
+                messages.extend(history)
+            else:
+                 for old_q, old_a in history:
+                    messages.append({"role": "user", "content": old_q})
+                    messages.append({"role": "assistant", "content": old_a})
+        
+        messages.append({"role": "user", "content": current_prompt})
+        
+        try:
+            payload = {
+                "model": self.model_name,
+                "messages": messages,
+                "stream": False,
+                "options": {
+                    "temperature": self.temperature,
+                    "num_predict": self.max_new_tokens
+                }
+            }
+            
+            response = requests.post(f"{self.ollama_url}/api/chat", json=payload)
+            response.raise_for_status()
+            
+            result_json = response.json()
+            answer = result_json.get("message", {}).get("content", "")
+            
+            return {
+                "answer": answer.strip(),
+                "question": question,
+                "num_sources": 0, # 这里没有单独计数，或可以传进来
+                "model": f"{self.model_name} (Ollama)"
+            }
+            
+        except Exception as e:
+            return {
+                "answer": f"Ollama 调用失败: {str(e)}",
+                "question": question,
+                "num_sources": 0,
+                "model": self.model_name
+            }
+
+    def _generate_hf(
+        self,
+        question: str,
+        context: str,
+        history: List[List[str]],
+        custom_prompt: str
+    ) -> Dict[str, any]:
+        """使用本地 HF 模型生成"""
+        
         # 构建当前问题的完整prompt（带参考资料）
         prompt_template = custom_prompt or self.PROMPT_TEMPLATE
         current_prompt = prompt_template.format(
@@ -239,7 +334,7 @@ class LLMGenerator:
         return {
             "answer": answer,
             "question": question,
-            "num_sources": len(context_documents),
+            "num_sources": 0,
             "model": self.model_name
         }
     
@@ -255,6 +350,7 @@ class LLMGenerator:
             "device": self.device,
             "max_new_tokens": self.max_new_tokens,
             "temperature": self.temperature,
+            "provider": self.provider
         }
 
 

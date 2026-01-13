@@ -9,12 +9,35 @@ models:
   
   # LLM模型
   llm:
+    provider: "huggingface"
+    
+    # HuggingFace 本地模型配置
     name: "Qwen/Qwen2-0.5B-Instruct" 
-    # 运行设备配置
     device: "cuda" 
     max_new_tokens: 512
     temperature: 0.7
-    load_in_4bit: false  # 显存足够，0.5B模型不需要量化
+    load_in_4bit: false
+    
+    # Ollama 配置
+    ollama:
+      base_url: "http://localhost:11434"
+      model: "qwen2.5:7b"      # 默认 Ollama 模型
+      temperature: 0.7
+
+  # 可选模型列表 (用于前端选择)
+  available_models:
+    - name: "Qwen/Qwen2-0.5B-Instruct"
+      provider: "huggingface"
+      desc: "本地显存模型 (0.5B)"
+    - name: "qwen2.5:7b"
+      provider: "ollama"
+      desc: "Ollama (Qwen 2.5 7B)"
+    - name: "llama3:8b"
+      provider: "ollama"
+      desc: "Ollama (Llama 3 8B)"
+    - name: "mistral"
+      provider: "ollama"
+      desc: "Ollama (Mistral)"
 
 # 文档处理配置
 document:
@@ -39,7 +62,8 @@ paths:
 web:
   host: "127.0.0.1"
   port: 7860
-  share: false  # 是否生成公共链接
+  share: false  
+  
 # 评测配置 (Ragas)
 evaluation:
   api:

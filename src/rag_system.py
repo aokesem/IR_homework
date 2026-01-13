@@ -63,15 +63,63 @@ class RAGSystem:
     def _init_generator(self):
         """初始化生成器"""
         llm_config = self.config['models']['llm']
+        provider = llm_config.get('provider', 'huggingface')
         
+        # Determine model name based on provider default in config
+        if provider == 'ollama':
+            model_name = llm_config.get('ollama', {}).get('model', 'qwen2.5:7b')
+        else:
+            model_name = llm_config['name']
+
         self.generator = LLMGenerator(
-            model_name=llm_config['name'],
+            model_name=model_name,
             device=llm_config['device'],
             load_in_4bit=llm_config.get('load_in_4bit', True),
             max_new_tokens=llm_config['max_new_tokens'],
             temperature=llm_config['temperature'],
-            dummy=self.dummy_mode
+            dummy=self.dummy_mode,
+            provider=provider,
+            ollama_url=llm_config.get('ollama', {}).get('base_url', "http://localhost:11434")
         )
+    
+    def reload_generator(self, model_name: str, provider: str) -> str:
+        """
+        重新加载生成器（切换模型）
+        
+        Args:
+            model_name: 新模型名称
+            provider: 提供商 ("huggingface" or "ollama")
+            
+        Returns:
+            状态消息
+        """
+        print(f"\n正在切换模型到: {model_name} ({provider})...")
+        llm_config = self.config['models']['llm']
+        
+        try:
+            # Re-initialize generator
+            # Note: For HuggingFace, this might take time to load weights
+            self.generator = LLMGenerator(
+                model_name=model_name,
+                device=llm_config['device'],
+                load_in_4bit=llm_config.get('load_in_4bit', True),
+                max_new_tokens=llm_config['max_new_tokens'],
+                temperature=llm_config['temperature'],
+                dummy=self.dummy_mode,
+                provider=provider,
+                ollama_url=llm_config.get('ollama', {}).get('base_url', "http://localhost:11434")
+            )
+            
+            # Update config in memory
+            self.config['models']['llm']['provider'] = provider
+            if provider == 'ollama':
+                self.config['models']['llm'].setdefault('ollama', {})['model'] = model_name
+            else:
+                self.config['models']['llm']['name'] = model_name
+                
+            return f"✅ 成功切换到模型: {model_name} ({provider})"
+        except Exception as e:
+            return f"❌ 模型切换失败: {str(e)}"
     
     def build_knowledge_base(self, document_dir: str = None) -> None:
         """
