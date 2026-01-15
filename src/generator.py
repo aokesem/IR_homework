@@ -104,7 +104,7 @@ class LLMGenerator:
             quantization_config=quantization_config,
             device_map="auto" if device == "cuda" else None,
             trust_remote_code=True,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32
+            dtype=torch.float16 if device == "cuda" else torch.float32
         )
         
         # CPU模式下手动移动模型
