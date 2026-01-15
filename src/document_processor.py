@@ -182,8 +182,6 @@ class DocumentProcessor:
         # 移除多余的空白字符
         text = ' '.join(text.split())
         
-        # 移除特殊字符（根据需要调整）
-        # text = re.sub(r'[^\w\s\u4e00-\u9fff]', '', text)
         
         return text.strip()
     

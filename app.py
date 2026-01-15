@@ -11,7 +11,6 @@ import json
 import time
 from datetime import datetime
 
-# 添加src目录到Python路径
 sys.path.append(str(Path(__file__).parent / "src"))
 
 from src.rag_system import RAGSystem
@@ -27,7 +26,7 @@ class RAGWebApp:
         Args:
             config_path: 配置文件路径
         """
-        # 环境变量控制虚拟模式
+        # 环境变量控制虚拟模式快速查看开发效果
         dummy_mode = os.environ.get("RAG_DEV_MODE", "False").lower() == "true"
         self.rag_system = RAGSystem(config_path, dummy_mode=dummy_mode)
         
@@ -42,7 +41,7 @@ class RAGWebApp:
                 except Exception as e:
                     print(f"加载知识库失败: {e}")
         else:
-            self.kb_loaded = True # 虚拟模式假装加载了
+            self.kb_loaded = True 
             
         # 对话保存路径
         self.conv_dir = Path(self.rag_system.config['paths'].get('conversations', "data/conversations"))
@@ -263,13 +262,8 @@ class RAGWebApp:
 
 
     def create_interface(self):
-        """三栏布局 (修正版：移除不兼容参数，恢复浏览器原生滚动条)"""
         
-        # 1. 定义 CSS：
-        # - 删除了 .gradio-container 的高度限制，让页面可以自由滚动
-        # - 给聊天框一个固定高度，防止它一开始太小或无限拉长
         self.custom_css = """
-        /* 聊天框设置固定高度，内部可滚动，外部也可以随页面滚动 */
         #chat-main { 
             height: 700px !important; 
             overflow-y: auto; 
@@ -278,18 +272,15 @@ class RAGWebApp:
             background-color: #f9fafb;
         }
         
-        /* 底部输入框稍微美化一下 */
         #input-row { 
             margin-top: 10px;
         }
         
-        /* 限制一下知识库表格的高度，防止它太长把页面撑得过长 */
         #kb-table { 
             max-height: 300px !important; 
             overflow-y: auto; 
         }
         
-        /* 隐藏掉不需要的页脚 */
         footer { visibility: hidden !important; }
         """
 
@@ -297,7 +288,7 @@ class RAGWebApp:
             
             with gr.Row():
                 
-                # ================= 左侧：历史 & 文件 (20%) =================
+                #左侧历史文件
                 with gr.Column(scale=2, min_width=250):
                     gr.Markdown("### 🗂️ 历史与文件")
                     
@@ -342,10 +333,9 @@ class RAGWebApp:
                     refresh_kb_btn = gr.Button("🔄 刷新列表", size="sm")
 
 
-                # ================= 中间：核心对话区 (60%) =================
+                # 中间核心对话区
                 with gr.Column(scale=6):
                     # 聊天框
-                    # 修正点：移除了 show_copy_button 参数
                     chatbot = gr.Chatbot(
                         label=None,
                         show_label=False,
@@ -366,7 +356,7 @@ class RAGWebApp:
                         submit_btn = gr.Button("发送", variant="primary", scale=1, min_width=60)
 
 
-                # ================= 右侧：设置 & 信息 (20%) =================
+                #右侧设置信息
                 with gr.Column(scale=2, min_width=250):
                     gr.Markdown("### ⚙️ 设置与监控")
                     
@@ -416,7 +406,7 @@ class RAGWebApp:
                     info_output = gr.Markdown(elem_id="sys_info")
                     refresh_info_btn = gr.Button("刷新状态", size="sm")
 
-            # ================= 事件绑定逻辑 (保持不变) =================
+            #事件绑定逻辑
             new_chat_btn.click(fn=self.handle_clear, outputs=[chatbot, question_input, chat_selector])
 
             submit_triggers = [question_input.submit, submit_btn.click]
@@ -453,10 +443,9 @@ class RAGWebApp:
 
 def main():
     """主函数"""
-    # 初始化应用
+    # 初始化
     app = RAGWebApp()
-    
-    # 创建界面
+
     demo = app.create_interface()
     
     # 启动服务

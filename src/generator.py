@@ -68,7 +68,6 @@ class LLMGenerator:
             
         if self.provider == "ollama":
             print(f"Using Ollama provider: {model_name} at {ollama_url}")
-            # Ollama 不需要加载本地模型权重
             self.tokenizer = None
             self.model = None
             # 测试连接
@@ -81,7 +80,7 @@ class LLMGenerator:
             
         print(f"正在加载LLM模型: {model_name}")
         
-        # 配置量化（节省显存）
+        # 配置量化
         if load_in_4bit and device == "cuda":
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -128,7 +127,7 @@ class LLMGenerator:
         context_parts = []
         
         for i, doc in enumerate(documents, 1):
-            # 如果是tuple（包含分数），取第一个元素
+            # 如果是tuple取第一个元素
             if isinstance(doc, tuple):
                 doc = doc[0]
             
@@ -169,7 +168,6 @@ class LLMGenerator:
         # 构建上下文
         context = self.build_context(context_documents)
         
-        # Dispatch based on provider
         if self.provider == "ollama":
             return self._generate_ollama(question, context, history, custom_prompt)
         else:
@@ -222,7 +220,7 @@ class LLMGenerator:
             return {
                 "answer": answer.strip(),
                 "question": question,
-                "num_sources": 0, # 这里没有单独计数，或可以传进来
+                "num_sources": 0,
                 "model": f"{self.model_name} (Ollama)"
             }
             
@@ -243,7 +241,7 @@ class LLMGenerator:
     ) -> Dict[str, any]:
         """使用本地 HF 模型生成"""
         
-        # 构建当前问题的完整prompt（带参考资料）
+        # 构建当前问题的完整prompt带参考资料
         prompt_template = custom_prompt or self.PROMPT_TEMPLATE
         current_prompt = prompt_template.format(
             context=context,
@@ -298,7 +296,7 @@ class LLMGenerator:
             text,
             return_tensors="pt",
             truncation=True,
-            max_length=2048  # 限制输入长度
+            max_length=2048  # 限制输入长度2048
         ).to(self.device)
         
         # 生成

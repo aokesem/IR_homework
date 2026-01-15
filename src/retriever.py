@@ -102,14 +102,13 @@ class VectorRetriever:
         if self.vector_store is None:
             raise ValueError("向量索引尚未构建，请先调用build_index()")
         
-        # 相似度搜索（带分数）
+        # 相似度搜索
         results = self.vector_store.similarity_search_with_score(
             query=query,
             k=top_k
         )
         
-        # 过滤低分结果（FAISS返回的是距离，越小越相似）
-        # 转换为相似度分数（0-1之间，1表示完全相同）
+        # 过滤低分结果
         filtered_results = []
         for doc, distance in results:
             # L2距离转换为相似度
@@ -166,9 +165,7 @@ class VectorRetriever:
             return []
             
         source_counts = {}
-        # 通过访问 FAISS 的 docstore 获取所有存储的文档
         try:
-            # Note: 访问私有属性 _dict 是因为 langchain 的 FAISS 包装没有提供直接列出所有文档的公共 API
             for doc_id, doc in self.vector_store.docstore._dict.items():
                 source = doc.metadata.get('file_name', '未知文件')
                 source_counts[source] = source_counts.get(source, 0) + 1
