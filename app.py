@@ -66,7 +66,13 @@ class RAGWebApp:
             )
 
             # 构造来源 HTML
-            sources_html = f"\n\n<details><summary>📑 查看 {result['num_sources']} 个参考来源</summary>\n\n"
+            sources_html = ""
+            
+            # 如果发生了改写，显示实际检索词
+            if result.get('rewritten_query') and result['rewritten_query'] != question:
+                sources_html += f"<small>🔍 优化检索: {result['rewritten_query']}</small>\n\n"
+            
+            sources_html += f"\n\n<details><summary>📑 查看 {result['num_sources']} 个参考来源</summary>\n\n"
             for i, source in enumerate(result.get('sources', []), 1):
                 sources_html += f"**[资料{i}]** {source['file_name']} (相似度: {source['similarity'] or 'N/A'})\n"
                 sources_html += f"> {source['content']}\n\n"

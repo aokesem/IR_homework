@@ -204,9 +204,20 @@ class RAGSystem:
         if top_k is None:
             top_k = self.config['retrieval']['top_k']
         
-        # 1. 检索相关文档
+        # 0. 查询改写 (Query Rewriting)
+        # 只有在有多轮对话历史时才进行改写
+        rewritten_query = question
+        if history and len(history) > 0:
+            print(f"正在改写查询: {question}")
+            try:
+                rewritten_query = self.generator.rewrite_query(question, history)
+                print(f"✓ 查询改写完成: {rewritten_query}")
+            except Exception as e:
+                print(f"⚠️ 查询改写失败: {e}")
+
+        # 1. 检索相关文档 (使用改写后的查询)
         retrieved_docs = self.retriever.retrieve(
-            query=question,
+            query=rewritten_query,
             top_k=top_k,
             score_threshold=self.config['retrieval'].get('score_threshold', 0.0)
         )
@@ -214,12 +225,13 @@ class RAGSystem:
         if not retrieved_docs:
             return {
                 "question": question,
+                "rewritten_query": rewritten_query,
                 "answer": "抱歉，在知识库中没有找到相关信息。",
                 "sources": [],
                 "num_sources": 0
             }
         
-        # 2. 生成答案
+        # 2. 生成答案 (使用原始问题，因为上下文已经通过检索注入了)
         result = self.generator.generate(
             question=question,
             context_documents=retrieved_docs,
@@ -230,6 +242,7 @@ class RAGSystem:
         # 3. 整理返回结果
         response = {
             "question": question,
+            "rewritten_query": rewritten_query,
             "answer": result['answer'],
             "num_sources": len(retrieved_docs)
         }

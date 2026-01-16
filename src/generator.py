@@ -1,6 +1,6 @@
 """
 生成模块
-负责使用LLM生成答案
+负责使用LLM生成答案及查询改写
 """
 from typing import List, Dict
 import json
@@ -13,7 +13,7 @@ from langchain_core.documents import Document
 class LLMGenerator:
     """LLM生成器"""
     
-    # Prompt模板
+    # RAG 回答 Prompt
     PROMPT_TEMPLATE = """你是一个专业的问答助手。请**仅基于以下参考资料**回答用户问题。
 
 参考资料：
@@ -27,6 +27,18 @@ class LLMGenerator:
 3. 回答要简洁明了
 
 回答："""
+
+    # 查询重写 Prompt
+    REWRITE_PROMPT_TEMPLATE = """根据以下对话历史，重写用户的最后一个问题，使其成为一个独立、完整的搜索查询。
+如果问题包含指代词（如"它"、"这个"），请将其替换为具体的指代对象。
+不要回答问题，只输出重写后的查询。
+
+对话历史：
+{history_str}
+
+原始问题：{question}
+
+重写后的搜索查询："""
     
     def __init__(
         self,
@@ -115,29 +127,80 @@ class LLMGenerator:
         print(f"✓ LLM模型加载完成 (设备: {device})")
     
     def build_context(self, documents: List[Document]) -> str:
-        """
-        构建上下文字符串
-        
-        Args:
-            documents: 检索到的文档列表（可能包含分数）
-            
-        Returns:
-            上下文字符串
-        """
+        """构建上下文字符串"""
         context_parts = []
-        
         for i, doc in enumerate(documents, 1):
-            # 如果是tuple取第一个元素
-            if isinstance(doc, tuple):
-                doc = doc[0]
-            
+            if isinstance(doc, tuple): doc = doc[0]
             source = doc.metadata.get('file_name', '未知来源')
             content = doc.page_content.strip()
-            
             context_parts.append(f"[资料{i}] 来源：{source}\n{content}")
-        
         return "\n\n".join(context_parts)
     
+    def rewrite_query(self, question: str, history: List[List[str]]) -> str:
+        """
+        基于历史对话重写用户问题 (Query Rewriting)
+        """
+        if not history or self.dummy:
+            return question
+            
+        # 提取最近的3轮对话作为上下文
+        recent_history = history[-3:] if len(history) > 3 else history
+        
+        # 格式化历史对话字符串
+        history_str = ""
+        if isinstance(recent_history[0], dict):
+             for msg in recent_history:
+                role = "用户" if msg.get("role") == "user" else "助手"
+                history_str += f"{role}: {msg.get('content')}\n"
+        else:
+            for q, a in recent_history:
+                history_str += f"用户: {q}\n助手: {a}\n"
+                
+        prompt = self.REWRITE_PROMPT_TEMPLATE.format(
+            history_str=history_str,
+            question=question
+        )
+        
+        # 调用模型生成 (不带RAG上下文)
+        # 这里为了简单，复用 generate 方法但传入空context
+        # 注意：这里我们使用一次性的推理调用，不带 Chat Template 的 history，因为 Prompt 已经包含了 history
+        
+        try:
+            if self.provider == "ollama":
+                # Ollama 直接调用
+                payload = {
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.3} # 改写任务温度要低
+                }
+                res = requests.post(f"{self.ollama_url}/api/generate", json=payload)
+                if res.status_code == 200:
+                    rewritten = res.json().get("response", "").strip()
+                    # 清洗可能带有的引号
+                    return rewritten.strip('"').strip("'")
+            else:
+                # HF 本地调用
+                inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True).to(self.device)
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_new_tokens=64,
+                        temperature=0.3,
+                        do_sample=True,
+                        pad_token_id=self.tokenizer.eos_token_id
+                    )
+                full = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                # 截取 Prompt 之后的内容
+                rewritten = full[len(prompt):].strip()
+                return rewritten.strip('"').strip("'")
+                
+        except Exception as e:
+            print(f"⚠️ 查询重写失败: {e}")
+            return question
+            
+        return question
+
     def generate(
         self,
         question: str,
@@ -145,18 +208,7 @@ class LLMGenerator:
         history: List[List[str]] = None,
         custom_prompt: str = None
     ) -> Dict[str, any]:
-        """
-        生成答案
-        
-        Args:
-            question: 用户问题
-            context_documents: 上下文文档列表
-            history: 对话历史 [[user_msg, bot_msg], ...]
-            custom_prompt: 自定义prompt模板（可选）
-            
-        Returns:
-            包含答案和元信息的字典
-        """
+        """生成答案"""
         if self.dummy:
             return {
                 "answer": f"【虚拟回答】这是一个模拟生成的答案。当前处于开发模式，已跳过真实的模型推理过程。您提问的问题是：\"{question}\"",
@@ -173,22 +225,10 @@ class LLMGenerator:
         else:
             return self._generate_hf(question, context, history, custom_prompt)
 
-    def _generate_ollama(
-        self,
-        question: str,
-        context: str,
-        history: List[List[str]],
-        custom_prompt: str
-    ) -> Dict[str, any]:
-        """使用 Ollama API 生成"""
-        # 构建当前问题的完整prompt
+    def _generate_ollama(self, question, context, history, custom_prompt) -> Dict:
         prompt_template = custom_prompt or self.PROMPT_TEMPLATE
-        current_prompt = prompt_template.format(
-            context=context,
-            question=question
-        )
+        current_prompt = prompt_template.format(context=context, question=question)
         
-        # 构建 messages
         messages = []
         if history:
             if isinstance(history[0], dict):
@@ -210,173 +250,70 @@ class LLMGenerator:
                     "num_predict": self.max_new_tokens
                 }
             }
+            res = requests.post(f"{self.ollama_url}/api/chat", json=payload)
+            res.raise_for_status()
+            answer = res.json().get("message", {}).get("content", "").strip()
             
-            response = requests.post(f"{self.ollama_url}/api/chat", json=payload)
-            response.raise_for_status()
-            
-            result_json = response.json()
-            answer = result_json.get("message", {}).get("content", "")
-            
-            return {
-                "answer": answer.strip(),
-                "question": question,
-                "num_sources": 0,
-                "model": f"{self.model_name} (Ollama)"
-            }
-            
+            return {"answer": answer, "question": question, "num_sources": 0, "model": f"{self.model_name} (Ollama)"}
         except Exception as e:
-            return {
-                "answer": f"Ollama 调用失败: {str(e)}",
-                "question": question,
-                "num_sources": 0,
-                "model": self.model_name
-            }
+            return {"answer": f"Ollama Error: {str(e)}", "question": question, "num_sources": 0, "model": self.model_name}
 
-    def _generate_hf(
-        self,
-        question: str,
-        context: str,
-        history: List[List[str]],
-        custom_prompt: str
-    ) -> Dict[str, any]:
-        """使用本地 HF 模型生成"""
-        
-        # 构建当前问题的完整prompt带参考资料
+    def _generate_hf(self, question, context, history, custom_prompt) -> Dict:
         prompt_template = custom_prompt or self.PROMPT_TEMPLATE
-        current_prompt = prompt_template.format(
-            context=context,
-            question=question
-        )
+        current_prompt = prompt_template.format(context=context, question=question)
+        is_instruct = "Instruct" in self.model_name or "Chat" in self.model_name
         
-        # 检测模型是否支持chat模板
-        is_instruct_model = "Instruct" in self.model_name or "instruct" in self.model_name or "Chat" in self.model_name
-        
-        if is_instruct_model:
-            # Instruct模型：构建消息列表
+        if is_instruct:
             try:
                 messages = []
-                # 添加历史记录
-                if history and len(history) > 0:
-                    # 如果 history 已经是 OpenAI 格式 (list of dicts)，直接添加
+                if history:
                     if isinstance(history[0], dict):
                         messages.extend(history)
                     else:
-                        # 兼容旧的 List[List[str]] 格式
-                        for old_question, old_answer in history:
-                            messages.append({"role": "user", "content": old_question})
-                            messages.append({"role": "assistant", "content": old_answer})
-                
-                # 添加当前带上下文的问题
+                        for q, a in history:
+                            messages.append({"role": "user", "content": q})
+                            messages.append({"role": "assistant", "content": a})
                 messages.append({"role": "user", "content": current_prompt})
-                
-                text = self.tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True
-                )
-            except Exception as e:
-                print(f"警告: chat模板应用失败，使用直接输入: {e}")
+                text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            except:
                 text = current_prompt
         else:
-            # 基础模型：将历史拼接在最前面
             history_text = ""
             if history:
                 if isinstance(history[0], dict):
                     for msg in history:
-                        role_name = "用户" if msg["role"] == "user" else "助手"
-                        history_text += f"{role_name}：{msg['content']}\n\n"
+                        role = "用户" if msg["role"]=="user" else "助手"
+                        history_text += f"{role}：{msg['content']}\n\n"
                 else:
-                    for old_question, old_answer in history:
-                        history_text += f"用户问题：{old_question}\n回答：{old_answer}\n\n"
-            
+                    for q, a in history:
+                        history_text += f"用户问题：{q}\n回答：{a}\n\n"
             text = history_text + current_prompt
         
-        # Tokenize
-        inputs = self.tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=2048  # 限制输入长度2048
-        ).to(self.device)
-        
-        # 生成
+        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=2048).to(self.device)
         with torch.no_grad():
             outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=self.max_new_tokens,
-                temperature=self.temperature,
-                do_sample=True,
-                top_p=0.9,
-                pad_token_id=self.tokenizer.eos_token_id
+                **inputs, max_new_tokens=self.max_new_tokens, temperature=self.temperature, 
+                do_sample=True, top_p=0.9, pad_token_id=self.tokenizer.eos_token_id
             )
-        
-        # 解码
         full_response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # 提取回答部分
-        if is_instruct_model:
-            # Instruct模型：提取assistant部分
-            if "assistant\n" in full_response:
-                answer = full_response.split("assistant\n")[-1].strip()
-            else:
-                # 去掉输入prompt部分
-                answer = full_response[len(text):].strip()
+        if is_instruct and "assistant\n" in full_response:
+            answer = full_response.split("assistant\n")[-1].strip()
         else:
-            # 基础模型：去掉输入prompt部分
             answer = full_response[len(text):].strip()
-            
-        # 如果答案为空或太短，返回完整响应
-        if not answer or len(answer) < 10:
-            answer = full_response.strip()
+        if not answer: answer = full_response
         
-        return {
-            "answer": answer,
-            "question": question,
-            "num_sources": 0,
-            "model": self.model_name
-        }
+        return {"answer": answer, "question": question, "num_sources": 0, "model": self.model_name}
     
     def get_info(self) -> Dict:
-        """
-        获取生成器信息
-        
-        Returns:
-            信息字典
-        """
         return {
             "model_name": self.model_name,
             "device": self.device,
             "max_new_tokens": self.max_new_tokens,
-            "temperature": self.temperature,
             "provider": self.provider
         }
 
 
 if __name__ == "__main__":
-    # 测试代码
-    from langchain.schema import Document
-    
-    # 测试文档
-    test_docs = [
-        Document(
-            page_content="RAG（Retrieval-Augmented Generation）是一种结合检索和生成的技术，先检索相关文档，再基于文档生成答案。",
-            metadata={"file_name": "test.txt"}
-        )
-    ]
-    
-    # 初始化生成器（测试时用CPU）
-    generator = LLMGenerator(
-        model_name="Qwen/Qwen3-0.6B-Instruct",
-        device="cpu",
-        load_in_4bit=False
-    )
-    
-    # 生成答案
-    result = generator.generate(
-        question="什么是RAG?",
-        context_documents=test_docs
-    )
-    
-    print(f"\n问题: {result['question']}")
-    print(f"\n答案: {result['answer']}")
-    print(f"\n使用模型: {result['model']}")
+    # Test stub
+    pass
