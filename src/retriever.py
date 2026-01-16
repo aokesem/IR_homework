@@ -266,10 +266,26 @@ class VectorRetriever:
         ]
 
     def get_stats(self) -> Dict:
+        """
+        获取检索器统计信息
+        
+        Returns:
+            统计信息字典
+        """
+        # 计算文档数量：优先使用BM25文档列表，如果为空则尝试获取向量库数量
+        count = 0
+        if self.bm25_docs:
+            count = len(self.bm25_docs)
+        elif self.vector_store is not None:
+            try:
+                count = self.vector_store.index.ntotal
+            except:
+                count = 0
+
         return {
             "embedding_model": self.embedding_model_name,
             "device": self.device,
-            "doc_count": len(self.bm25_docs) if self.bm25_docs else 0,
+            "document_count": count,
             "status": "Ready" if self.vector_store else "Not Initialized"
         }
 
