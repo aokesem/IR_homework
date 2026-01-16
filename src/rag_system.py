@@ -131,10 +131,7 @@ class RAGSystem:
     
     def build_knowledge_base(self, document_dir: str = None) -> None:
         """
-        构建知识库
-        
-        Args:
-            document_dir: 文档目录（默认使用配置中的路径）
+        构建知识库 (双版本共存模式)
         """
         if document_dir is None:
             document_dir = self.config['paths']['raw_docs']
@@ -143,24 +140,45 @@ class RAGSystem:
         print(f"构建知识库: {document_dir}")
         print(f"{'='*50}\n")
         
-        # 1. 加载和处理文档 (传入 generator 以支持上下文增强)
-        # 注意: 这会显著增加索引构建时间，但提升检索效果
-        chunks = self.doc_processor.process_directory(
-            document_dir,
-            generator=self.generator
-        )
+        all_chunks = []
         
-        if not chunks:
+        # --- 第1轮：基础版 (Standard) ---
+        # 特点：普通切分，无增强，速度快
+        print("\n=== 第1轮：构建基础版索引 (Baseline) ===")
+        chunks_v1 = self.doc_processor.process_directory(
+            document_dir,
+            generator=None,
+            label=" [基础版]",
+            enable_semantic=False,
+            enable_augmentation=False
+        )
+        all_chunks.extend(chunks_v1)
+        
+        # --- 第2轮：增强版 (Advanced) ---
+        # 特点：语义切分 + 上下文增强，效果好但构建慢
+        # 只有在初始化了Generator的情况下才跑这一轮
+        if self.generator:
+            print("\n=== 第2轮：构建增强版索引 (Advanced) ===")
+            chunks_v2 = self.doc_processor.process_directory(
+                document_dir,
+                generator=self.generator,
+                label=" [增强版]",
+                enable_semantic=True,  # 启用语义切分
+                enable_augmentation=True # 启用LLM增强
+            )
+            all_chunks.extend(chunks_v2)
+        
+        if not all_chunks:
             print("警告: 没有文档可以处理")
             return
         
-        # 2. 构建向量索引
-        self.retriever.build_index(chunks)
+        # 2. 构建向量索引 (一次性构建)
+        self.retriever.build_index(all_chunks)
         
         # 3. 保存向量数据库
         self.retriever.save()
         
-        print(f"\n✓ 知识库构建完成 ({len(chunks)} 个文档块)")
+        print(f"\n✓ 知识库构建完成 (共 {len(all_chunks)} 个文档块)")
     
     def load_knowledge_base(self) -> None:
         """加载已有的知识库"""
@@ -195,20 +213,14 @@ class RAGSystem:
         top_k: int = None,
         history: List[List[str]] = None,
         custom_prompt: str = None,
-        return_sources: bool = True
+        return_sources: bool = True,
+        file_filters: List[str] = None
     ) -> Dict:
         """
         问答查询
         
         Args:
-            question: 用户问题
-            top_k: 检索top k个文档（默认使用配置）
-            history: 对话历史 [[user_msg, bot_msg], ...]
-            custom_prompt: 自定义 Prompt 模板
-            return_sources: 是否返回来源文档
-            
-        Returns:
-            包含答案和来源的字典
+            file_filters: 指定检索的文件范围
         """
         if top_k is None:
             top_k = self.config['retrieval']['top_k']
@@ -224,11 +236,12 @@ class RAGSystem:
             except Exception as e:
                 print(f"⚠️ 查询改写失败: {e}")
 
-        # 1. 检索相关文档 (使用改写后的查询)
+        # 1. 检索相关文档 (使用改写后的查询 + 文件过滤)
         retrieved_docs = self.retriever.retrieve(
             query=rewritten_query,
             top_k=top_k,
-            score_threshold=self.config['retrieval'].get('score_threshold', 0.0)
+            score_threshold=self.config['retrieval'].get('score_threshold', 0.0),
+            file_filters=file_filters
         )
         
         if not retrieved_docs:

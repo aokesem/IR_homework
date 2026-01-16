@@ -2,6 +2,7 @@
 文档处理模块
 负责加载、清洗、切分文档及上下文增强
 支持: 语义切分 (Semantic Chunking)
+支持: 多版本共存 (A/B Test)
 """
 import os
 import json
@@ -29,7 +30,6 @@ except ImportError:
 class DocumentProcessor:
     """文档处理器"""
     
-    # 上下文增强 Prompt
     CONTEXT_PROMPT = """请为以下文本片段生成一个简短的上下文说明（20-30字以内）。
 说明该片段来自文件《{filename}》，并概括其核心内容。
 格式要求：[关于{filename}的...说明]
@@ -50,7 +50,7 @@ class DocumentProcessor:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.processed_dir = Path(processed_dir) if processed_dir else None
-        self.use_semantic_chunking = use_semantic_chunking
+        self.default_use_semantic = use_semantic_chunking # 保存默认设置
         self.embeddings = embeddings
         
         if self.processed_dir:
@@ -64,16 +64,14 @@ class DocumentProcessor:
             length_function=len,
         )
         
-        # 2. 语义切分器
+        # 2. 语义切分器 (预初始化)
         self.semantic_splitter = None
-        if use_semantic_chunking and HAS_SEMANTIC_CHUNKER and embeddings:
-            print("🚀 启用语义切分 (Semantic Chunking)")
+        if HAS_SEMANTIC_CHUNKER and embeddings:
             try:
-                # 使用百分位阈值策略
                 self.semantic_splitter = SemanticChunker(
                     embeddings,
                     breakpoint_threshold_type="percentile",
-                    breakpoint_threshold_amount=90 # 阈值越高切得越碎
+                    breakpoint_threshold_amount=90
                 )
             except Exception as e:
                 print(f"❌ 初始化语义切分器失败: {e}")
@@ -91,9 +89,8 @@ class DocumentProcessor:
             try:
                 docs = self._load_single_file(file_path)
                 documents.extend(docs)
-                print(f"✓ 成功加载: {file_path} ({len(docs)} 个文档)")
             except Exception as e:
-                print(f"✗ 加载失败: {file_path}, 错误: {str(e)}")
+                print(f"✗ 加载失败: {file_path}, {e}")
         return documents
     
     def _load_single_file(self, file_path: str) -> List[Document]:
@@ -102,10 +99,8 @@ class DocumentProcessor:
             raise ValueError(f"不支持的文件格式: {file_ext}")
         
         loader_class = self.loader_mapping[file_ext]
-        if file_ext == '.txt':
-            loader = loader_class(file_path, encoding='utf-8')
-        else:
-            loader = loader_class(file_path)
+        kwargs = {'encoding': 'utf-8'} if file_ext == '.txt' else {}
+        loader = loader_class(file_path, **kwargs)
         
         documents = loader.load()
         for doc in documents:
@@ -113,16 +108,18 @@ class DocumentProcessor:
             doc.metadata['file_name'] = os.path.basename(file_path)
         return documents
     
-    def split_documents(self, documents: List[Document]) -> List[Document]:
-        """切分文档"""
-        # 如果启用了语义切分且初始化成功，优先使用语义切分
-        if self.semantic_splitter:
-            print("正在进行语义切分...")
+    def split_documents(self, documents: List[Document], use_semantic: bool = False) -> List[Document]:
+        """
+        切分文档
+        Args:
+            use_semantic: 是否强制使用语义切分
+        """
+        # 只有当启用了语义切分，且环境支持，且传入了embeddings时才执行
+        if use_semantic and self.semantic_splitter:
+            # print("  - 执行语义切分...")
             try:
                 chunks = self.semantic_splitter.split_documents(documents)
-                print(f"语义切分完成: {len(documents)} -> {len(chunks)} Chunks")
-                
-                # 语义切分后可能出现超大块，再次用字符切分器兜底处理一下超长块
+                # 兜底超长块
                 final_chunks = []
                 for chunk in chunks:
                     if len(chunk.page_content) > self.chunk_size * 1.5:
@@ -131,19 +128,16 @@ class DocumentProcessor:
                     else:
                         final_chunks.append(chunk)
                 chunks = final_chunks
-                
             except Exception as e:
                 print(f"⚠️ 语义切分失败 ({e})，回退到基础切分")
                 chunks = self.text_splitter.split_documents(documents)
         else:
+            # print("  - 执行基础切分...")
             chunks = self.text_splitter.split_documents(documents)
         
         for i, chunk in enumerate(chunks):
             chunk.metadata['chunk_id'] = i
         
-        if not self.semantic_splitter:
-             print(f"基础切分完成: {len(documents)} -> {len(chunks)} Chunks")
-             
         return chunks
     
     def clean_text(self, text: str) -> str:
@@ -151,38 +145,29 @@ class DocumentProcessor:
         return text.strip()
 
     def augment_chunk_with_context(self, chunk: Document, generator) -> Document:
-        """使用 LLM 为 Chunk 生成上下文前缀"""
         if not generator: return chunk
         filename = chunk.metadata.get('file_name', '未知文件')
         content = chunk.page_content
-        
-        prompt = self.CONTEXT_PROMPT.format(
-            filename=filename,
-            chunk_content=content[:500]
-        )
-        
+        prompt = self.CONTEXT_PROMPT.format(filename=filename, chunk_content=content[:500])
         try:
-            result = generator.generate(
-                question=prompt,
-                context_documents=[],
-                history=[],
-                custom_prompt="{question}"
-            )
+            result = generator.generate(question=prompt, context_documents=[], history=[], custom_prompt="{question}")
             context_desc = result['answer'].strip().replace("上下文说明：", "").strip()
             chunk.page_content = f"{context_desc}\n{content}"
             chunk.metadata['is_augmented'] = True
             return chunk
-        except Exception as e:
-            print(f"⚠️ 上下文增强失败: {e}")
+        except Exception:
             return chunk
 
-    def _get_cache_path(self, file_path: str) -> Path:
+    def _get_cache_path(self, file_path: str, label: str = "") -> Path:
+        """缓存路径包含label，防止冲突"""
         if not self.processed_dir: return None
-        return self.processed_dir / f"{os.path.basename(file_path)}.json"
+        # label 清理文件名非法字符
+        safe_label = label.replace("[", "").replace("]", "").replace(" ", "_")
+        filename = f"{os.path.basename(file_path)}_{safe_label}.json"
+        return self.processed_dir / filename
 
-    def _save_cache(self, file_path: str, chunks: List[Document]):
-        """保存处理后的Chunks到缓存"""
-        cache_path = self._get_cache_path(file_path)
+    def _save_cache(self, file_path: str, chunks: List[Document], label: str = ""):
+        cache_path = self._get_cache_path(file_path, label)
         if not cache_path: return
         try:
             mtime = os.path.getmtime(file_path)
@@ -196,8 +181,8 @@ class DocumentProcessor:
         except Exception as e:
             print(f"警告: 写入缓存失败 {file_path}: {e}")
 
-    def _load_cache(self, file_path: str) -> List[Document]:
-        cache_path = self._get_cache_path(file_path)
+    def _load_cache(self, file_path: str, label: str = "") -> List[Document]:
+        cache_path = self._get_cache_path(file_path, label)
         if not cache_path or not cache_path.exists(): return None
         try:
             with open(cache_path, 'r', encoding='utf-8') as f:
@@ -209,44 +194,70 @@ class DocumentProcessor:
         except Exception:
             return None
 
-    def process_directory(self, directory: str, generator=None) -> List[Document]:
-        """处理目录"""
+    def process_directory(
+        self, 
+        directory: str, 
+        generator=None, 
+        label: str = "", 
+        enable_semantic: bool = False,
+        enable_augmentation: bool = False
+    ) -> List[Document]:
+        """
+        处理目录
+        Args:
+            label: 附加到文件名的标签 (e.g. " [基础版]")
+            enable_semantic: 是否启用语义切分
+            enable_augmentation: 是否启用LLM增强
+        """
         file_paths = []
         for ext in self.loader_mapping.keys():
             file_paths.extend(Path(directory).glob(f'**/*{ext}'))
         file_paths = [str(fp) for fp in file_paths]
         
         if not file_paths:
-            print(f"警告: {directory} 为空")
             return []
         
         final_chunks = []
+        print(f"\n>> 开始处理任务: {label} (语义切分={enable_semantic}, 增强={enable_augmentation})")
+        
         for fp in file_paths:
-            cached_chunks = self._load_cache(fp)
+            # 1. 尝试从缓存加载 (带Label)
+            cached_chunks = self._load_cache(fp, label)
             if cached_chunks:
                 final_chunks.extend(cached_chunks)
-                print(f"🚀 从缓存加载Chunks: {os.path.basename(fp)}")
+                # print(f"🚀 [缓存] {os.path.basename(fp)}{label}")
                 continue
             
             try:
+                # Load
                 docs = self._load_single_file(fp)
                 for doc in docs: doc.page_content = self.clean_text(doc.page_content)
-                file_chunks = self.split_documents(docs)
                 
-                if generator:
-                    print(f"🤖 正在增强 {len(file_chunks)} 个切片 (此过程较慢)...")
+                # Split (传入特定的策略)
+                file_chunks = self.split_documents(docs, use_semantic=enable_semantic)
+                
+                # Augment (仅当启用增强且传入了生成器时)
+                if enable_augmentation and generator:
+                    print(f"🤖 [增强] {os.path.basename(fp)} ({len(file_chunks)} chunks)...")
                     augmented_chunks = []
                     for chunk in file_chunks:
                         aug_chunk = self.augment_chunk_with_context(chunk, generator)
                         augmented_chunks.append(aug_chunk)
                         print(".", end="", flush=True)
-                    print(" 完成!")
+                    print(" Done")
                     file_chunks = augmented_chunks
                 
-                self._save_cache(fp, file_chunks)
+                # Tagging: 修改文件名元数据，加上 Label
+                for chunk in file_chunks:
+                    chunk.metadata['file_name'] = chunk.metadata['file_name'] + label
+                
+                # Save chunks to cache (带Label)
+                self._save_cache(fp, file_chunks, label)
                 final_chunks.extend(file_chunks)
+                print(f"✅ [完成] {os.path.basename(fp)}{label}")
+                
             except Exception as e:
-                print(f"✗ 处理失败: {fp}, {e}")
+                print(f"✗ 失败: {fp}, {e}")
                 
         return final_chunks
 
