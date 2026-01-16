@@ -1,4 +1,3 @@
-
 """
 RAG问答系统 Web界面
 使用Gradio构建交互界面
@@ -271,104 +270,147 @@ class RAGWebApp:
 
     def create_interface(self):
         
-        # 优化后的 CSS 样式
+        # 精心设计的现代 UI CSS
         self.custom_css = """
+        /* 全局字体与背景 */
         .gradio-container {
-            font-family: 'Inter', -apple-system, system-ui, sans-serif !important;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+            background-color: #f8fafc !important;
         }
         
-        #chat-main {
-            height: 650px !important;
-            border: none !important;
-            background-color: transparent !important;
-        }
-        
-        /* 聊天气泡样式优化 */
-        .message {
-            border-radius: 12px !important;
-            padding: 12px 16px !important;
-            margin-bottom: 8px !important;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        }
-        
-        #input-row {
-            background: white;
-            padding: 15px;
-            border-radius: 12px;
-            box-shadow: 0 -4px 12px rgba(0,0,0,0.05);
-            border: 1px solid #e5e7eb;
-            margin-top: -10px;
-            position: relative;
-            z-index: 10;
-        }
-        
-        /* 侧边栏卡片样式 */
+        /* 侧边栏卡片美化 */
         .sidebar-card {
-            background: white;
-            padding: 16px;
-            border-radius: 12px;
-            border: 1px solid #e5e7eb;
-            margin-bottom: 16px;
+            background: white !important;
+            padding: 20px !important;
+            border-radius: 16px !important;
+            border: 1px solid #e2e8f0 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03) !important;
+            margin-bottom: 20px !important;
+            transition: all 0.3s ease !important;
+        }
+        .sidebar-card:hover {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08) !important;
+            transform: translateY(-2px);
         }
         
-        #kb-table {
-            max-height: 250px !important; 
-            overflow-y: auto; 
+        /* 标题样式 */
+        .sidebar-card h3 {
+            color: #1e293b !important;
+            font-size: 1.1rem !important;
+            font-weight: 700 !important;
+            margin-bottom: 12px !important;
+            border-left: 4px solid #3b82f6;
+            padding-left: 10px;
+        }
+
+        /* 聊天区美化 */
+        #chat-main {
+            height: 700px !important;
+            background: white !important;
+            border-radius: 16px !important;
+            border: 1px solid #e2e8f0 !important;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05) !important;
         }
         
+        /* 消息气泡自定义 - 针对 Gradio 4.x */
+        .message-row.user-row .bubble {
+            background-color: #3b82f6 !important;
+            color: white !important;
+            border-radius: 18px 18px 2px 18px !important;
+        }
+        .message-row.bot-row .bubble {
+            background-color: #f1f5f9 !important;
+            color: #1e293b !important;
+            border-radius: 18px 18px 18px 2px !important;
+            border: 1px solid #e2e8f0 !important;
+        }
+        
+        /* 来源详情美化 */
+details {
+            margin-top: 15px;
+            padding: 12px;
+            background: #ffffff;
+            border-radius: 10px;
+            border: 1px solid #cbd5e1;
+            font-size: 0.9rem;
+        }
+        summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: #64748b;
+            outline: none;
+        }
+        summary:hover { color: #3b82f6; }
+        
+        /* 输入框区域 */
+        #input-row {
+            margin-top: 15px !important;
+            padding: 8px !important;
+            background: transparent !important;
+        }
+        
+        .textbox-container textarea {
+            border-radius: 12px !important;
+            border: 1px solid #cbd5e1 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02) !important;
+            padding: 12px 16px !important;
+        }
+        .textbox-container textarea:focus {
+            border-color: #3b82f6 !important;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1) !important;
+        }
+
+        /* 隐藏页脚 */
         footer { visibility: hidden !important; }
+        
+        /* 表格样式 */
+        #kb-table {
+            border-radius: 8px;
+            overflow: hidden;
+        }
         """
 
-        with gr.Blocks(title="RAG 智能助手") as demo:
+        with gr.Blocks(title="RAG 智能知识库助手") as demo:
             
+            with gr.Row(variant="compact"):
+                gr.HTML("""
+                    <div style="text-align: center; padding: 20px 0;">
+                        <h1 style="color: #1e293b; font-weight: 800; margin-bottom: 5px;">🧠 RAG 智能助手</h1>
+                        <p style="color: #64748b; font-size: 1.1rem;">基于深度学习的文档增强问答系统</p>
+                    </div>
+                """)
+
             with gr.Row():
                 
-                # --- 左侧：历史与文件 ---
-                with gr.Column(scale=2, min_width=280):
-                    with gr.Group(elem_classes="sidebar-card"):
-                        gr.Markdown("### 🗂️ 历史会话")
-                        
-                        with gr.Row():
-                            new_chat_btn = gr.Button("➕ 新对话", variant="primary", size="sm", scale=3)
-                            refresh_chats_btn = gr.Button("🔄", size="sm", scale=1, min_width=30)
-                        
-                        with gr.Row():
-                            chat_selector = gr.Dropdown(
-                                show_label=False,
-                                choices=self.list_chats(),
-                                interactive=True,
-                                container=False,
-                                scale=4
-                            )
-                            delete_chat_btn = gr.Button("🗑️", size="sm", variant="stop", scale=1, min_width=30)
-
+                # --- 左侧：知识库管理 ---
+                with gr.Column(scale=3, min_width=300):
                     with gr.Group(elem_classes="sidebar-card"):
                         gr.Markdown("### 📚 知识库管理")
                         
                         file_upload = gr.File(
-                            label="上传文档 (PDF/TXT/MD)",
+                            label="上传新文档",
                             file_count="multiple",
-                            file_types=[".pdf", ".txt", ".docx", ".md"],
-                            height=100
+                            file_types=[ ".pdf", ".txt", ".docx", ".md"],
+                            height=120
                         )
                         
                         with gr.Row():
-                            upload_btn = gr.Button("📤 上传并处理", variant="secondary", size="sm")
-                            build_btn = gr.Button("🔨 全量重建", size="sm")
+                            upload_btn = gr.Button("📤 上传处理", variant="primary", size="sm")
+                            build_btn = gr.Button("🔨 重建库", size="sm")
                         
-                        upload_status = gr.Textbox(show_label=False, placeholder="就绪", interactive=False, lines=1, max_lines=1)
-                        
-                        gr.Markdown("#### 当前文档列表")
+                        upload_status = gr.Textbox(show_label=False, placeholder="系统就绪", interactive=False)
+                    
+                    with gr.Group(elem_classes="sidebar-card"):
+                        gr.Markdown("### 📑 文档列表")
                         with gr.Row():
-                             refresh_kb_btn = gr.Button("🔄 刷新列表", size="sm")
+                             refresh_kb_btn = gr.Button("🔄 刷新列表", size="sm", variant="secondary")
                         
                         kb_table = gr.Dataframe(
                             headers=["文件名", "切片数"],
                             datatype=["str", "number"],
                             value=self.refresh_kb_list(),
                             interactive=False,
-                            elem_id="kb-table",
-                            wrap=True
+                            elem_id="kb-table"
                         )
 
 
@@ -378,45 +420,60 @@ class RAGWebApp:
                     chatbot = gr.Chatbot(
                         label="对话记录",
                         show_label=False,
-                        elem_id="chat-main"
+                        elem_id="chat-main",
+                        avatar_images=(None, "https://api.dicebear.com/7.x/bottts/svg?seed=RAG")
                     )
                     
                     # 输入区
                     with gr.Row(elem_id="input-row"):
                         question_input = gr.Textbox(
                             show_label=False,
-                            placeholder="请输入您的问题... (Shift+Enter 换行)",
+                            placeholder="输入问题，Shift+Enter 换行...",
                             scale=8,
                             lines=1,
                             max_lines=8,
                             autofocus=True,
                             container=False
                         )
-                        submit_btn = gr.Button("🚀 发送", variant="primary", scale=1, min_width=80)
+                        submit_btn = gr.Button("🚀", variant="primary", scale=1, min_width=60)
+                    
+                    with gr.Row():
+                         gr.Markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.8rem;'>提示：系统会根据上传的文档自动检索相关内容进行回答</p>")
 
 
-                # --- 右侧：设置与监控 ---
-                with gr.Column(scale=2, min_width=250):
+                # --- 右侧：设置与历史 ---
+                with gr.Column(scale=3, min_width=300):
                     
                     with gr.Group(elem_classes="sidebar-card"):
-                        gr.Markdown("### 🛠️ 检索配置")
+                        gr.Markdown("### 🗂️ 历史会话")
+                        with gr.Row():
+                            chat_selector = gr.Dropdown(
+                                show_label=False,
+                                choices=self.list_chats(),
+                                interactive=True,
+                                container=False,
+                                scale=4
+                            )
+                        with gr.Row():
+                            new_chat_btn = gr.Button("➕ 新对话", variant="secondary", size="sm")
+                            delete_chat_btn = gr.Button("🗑️ 删除", size="sm", variant="stop")
+                            refresh_chats_btn = gr.Button("🔄", size="sm", min_width=30)
+
+                    with gr.Accordion("🛠️ 检索设置", open=False, elem_classes="sidebar-card"):
                         top_k_slider = gr.Slider(
                             minimum=1, maximum=10, value=5, step=1, 
-                            label="检索数量 (Top-K)",
-                            info="每次回答参考的文档片段数"
+                            label="Top-K 检索数",
+                            info="回答参考的文档片段数量"
                         )
-                    
-                    with gr.Accordion("📝 Prompt 工程", open=False, elem_classes="sidebar-card"):
                         prompt_input = gr.Textbox(
-                            show_label=False,
+                            label="自定义 System Prompt",
                             value=self.rag_system.generator.PROMPT_TEMPLATE,
-                            lines=8,
-                            placeholder="输入自定义 System Prompt..."
+                            lines=5
                         )
                         reset_prompt_btn = gr.Button("↺ 恢复默认", size="sm")
 
                     with gr.Group(elem_classes="sidebar-card"):
-                        gr.Markdown("### 🤖 模型控制")
+                        gr.Markdown("### 🤖 模型与状态")
                         
                         # 获取当前模型
                         current_llm = self.rag_system.config['models']['llm']
@@ -427,20 +484,19 @@ class RAGWebApp:
                              current_val = f"huggingface:{current_llm.get('name', '')}"
 
                         model_dropdown = gr.Dropdown(
-                            label="LLM 模型",
+                            label="当前大模型",
                             choices=self.get_available_models(),
                             value=current_val,
-                            interactive=True,
-                            container=False
+                            interactive=True
                         )
+                        
+                        with gr.Accordion("📊 系统信息", open=False):
+                            refresh_info_btn = gr.Button("刷新状态", size="sm")
+                            info_output = gr.Markdown(elem_id="sys_info")
+                        
                         model_status = gr.Textbox(show_label=False, placeholder="模型就绪", lines=1, interactive=False)
 
-                    with gr.Group(elem_classes="sidebar-card"):
-                        gr.Markdown("### 📊 系统状态")
-                        refresh_info_btn = gr.Button("刷新状态", size="sm")
-                        info_output = gr.Markdown(elem_id="sys_info")
-
-            # --- 事件绑定逻辑 ---
+            # --- 事件绑定逻辑 (保持不变) ---
             
             # 清空与新建
             new_chat_btn.click(fn=self.handle_clear, outputs=[chatbot, question_input, chat_selector])
@@ -461,7 +517,6 @@ class RAGWebApp:
             chat_selector.change(fn=self.load_chat, inputs=chat_selector, outputs=[chatbot, upload_status, chat_selector])
             refresh_chats_btn.click(fn=lambda: gr.update(choices=self.list_chats()), outputs=chat_selector)
             
-            # 删除对话 (关键新增)
             delete_chat_btn.click(
                 fn=self.delete_chat,
                 inputs=chat_selector,

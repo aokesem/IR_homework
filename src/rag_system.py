@@ -32,9 +32,9 @@ class RAGSystem:
         print("初始化RAG系统")
         print("=" * 50)
         
-        # 初始化各模块
-        self._init_document_processor()
+        # 初始化各模块 (注意顺序：先Retriever加载Embeddings，再Processor使用Embeddings)
         self._init_retriever()
+        self._init_document_processor()
         self._init_generator()
         
         print("\n✓ RAG系统初始化完成\n")
@@ -42,10 +42,15 @@ class RAGSystem:
     def _init_document_processor(self):
         """初始化文档处理器"""
         doc_config = self.config['document']
+        # 尝试从retriever获取embeddings对象
+        embeddings = getattr(self.retriever, 'embeddings', None)
+        
         self.doc_processor = DocumentProcessor(
             chunk_size=doc_config['chunk_size'],
             chunk_overlap=doc_config['chunk_overlap'],
-            processed_dir=self.config['paths'].get('processed_docs')
+            processed_dir=self.config['paths'].get('processed_docs'),
+            use_semantic_chunking=True,  # 默认开启语义切分
+            embeddings=embeddings
         )
     
     def _init_retriever(self):

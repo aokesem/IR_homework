@@ -1,6 +1,7 @@
 """
 文档处理模块
 负责加载、清洗、切分文档及上下文增强
+支持: 语义切分 (Semantic Chunking)
 """
 import os
 import json
@@ -17,6 +18,14 @@ from langchain_community.document_loaders import (
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
+# 尝试导入语义切分器
+try:
+    from langchain_experimental.text_splitter import SemanticChunker
+    HAS_SEMANTIC_CHUNKER = True
+except ImportError:
+    HAS_SEMANTIC_CHUNKER = False
+    print("⚠️ 未找到 langchain_experimental，语义切分不可用")
+
 class DocumentProcessor:
     """文档处理器"""
     
@@ -30,19 +39,44 @@ class DocumentProcessor:
 
 上下文说明："""
 
-    def __init__(self, chunk_size: int = 512, chunk_overlap: int = 50, processed_dir: str = None):
+    def __init__(
+        self, 
+        chunk_size: int = 512, 
+        chunk_overlap: int = 50, 
+        processed_dir: str = None,
+        use_semantic_chunking: bool = False,
+        embeddings = None
+    ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.processed_dir = Path(processed_dir) if processed_dir else None
+        self.use_semantic_chunking = use_semantic_chunking
+        self.embeddings = embeddings
+        
         if self.processed_dir:
             self.processed_dir.mkdir(parents=True, exist_ok=True)
         
+        # 1. 基础切分器
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             separators=["\n\n", "\n", "。", "！", "？", "；", ".", "!", "?", ";", " ", ""],
             length_function=len,
         )
+        
+        # 2. 语义切分器
+        self.semantic_splitter = None
+        if use_semantic_chunking and HAS_SEMANTIC_CHUNKER and embeddings:
+            print("🚀 启用语义切分 (Semantic Chunking)")
+            try:
+                # 使用百分位阈值策略
+                self.semantic_splitter = SemanticChunker(
+                    embeddings,
+                    breakpoint_threshold_type="percentile",
+                    breakpoint_threshold_amount=90 # 阈值越高切得越碎
+                )
+            except Exception as e:
+                print(f"❌ 初始化语义切分器失败: {e}")
         
         self.loader_mapping = {
             '.txt': TextLoader,
@@ -80,10 +114,36 @@ class DocumentProcessor:
         return documents
     
     def split_documents(self, documents: List[Document]) -> List[Document]:
-        chunks = self.text_splitter.split_documents(documents)
+        """切分文档"""
+        # 如果启用了语义切分且初始化成功，优先使用语义切分
+        if self.semantic_splitter:
+            print("正在进行语义切分...")
+            try:
+                chunks = self.semantic_splitter.split_documents(documents)
+                print(f"语义切分完成: {len(documents)} -> {len(chunks)} Chunks")
+                
+                # 语义切分后可能出现超大块，再次用字符切分器兜底处理一下超长块
+                final_chunks = []
+                for chunk in chunks:
+                    if len(chunk.page_content) > self.chunk_size * 1.5:
+                        sub_chunks = self.text_splitter.split_documents([chunk])
+                        final_chunks.extend(sub_chunks)
+                    else:
+                        final_chunks.append(chunk)
+                chunks = final_chunks
+                
+            except Exception as e:
+                print(f"⚠️ 语义切分失败 ({e})，回退到基础切分")
+                chunks = self.text_splitter.split_documents(documents)
+        else:
+            chunks = self.text_splitter.split_documents(documents)
+        
         for i, chunk in enumerate(chunks):
             chunk.metadata['chunk_id'] = i
-        print(f"文档切分完成: {len(documents)} 个文档 -> {len(chunks)} 个文档块")
+        
+        if not self.semantic_splitter:
+             print(f"基础切分完成: {len(documents)} -> {len(chunks)} Chunks")
+             
         return chunks
     
     def clean_text(self, text: str) -> str:
@@ -91,45 +151,27 @@ class DocumentProcessor:
         return text.strip()
 
     def augment_chunk_with_context(self, chunk: Document, generator) -> Document:
-        """
-        使用 LLM 为 Chunk 生成上下文前缀
-        """
-        if not generator:
-            return chunk
-            
+        """使用 LLM 为 Chunk 生成上下文前缀"""
+        if not generator: return chunk
         filename = chunk.metadata.get('file_name', '未知文件')
         content = chunk.page_content
         
-        # 构造 Prompt
         prompt = self.CONTEXT_PROMPT.format(
             filename=filename,
-            chunk_content=content[:500]  # 限制长度以节省Token
+            chunk_content=content[:500]
         )
         
         try:
-            # 调用生成器 (使用简单的生成模式，不做RAG)
-            # 这里我们需要直接访问底层接口或者使用一个特定的方法
-            # 假设 generator 有 _generate_hf 或类似的直接生成能力
-            # 为了通用，我们构造一个 dummy history 调用 generate
-            
             result = generator.generate(
                 question=prompt,
-                context_documents=[], # 空上下文
+                context_documents=[],
                 history=[],
-                custom_prompt="{question}" # 直接透传
+                custom_prompt="{question}"
             )
-            
-            context_desc = result['answer'].strip()
-            # 清理可能的括号
-            context_desc = context_desc.replace("上下文说明：", "").strip()
-            
-            # 拼接到原始内容前面
-            new_content = f"{context_desc}\n{content}"
-            chunk.page_content = new_content
+            context_desc = result['answer'].strip().replace("上下文说明：", "").strip()
+            chunk.page_content = f"{context_desc}\n{content}"
             chunk.metadata['is_augmented'] = True
-            
             return chunk
-            
         except Exception as e:
             print(f"⚠️ 上下文增强失败: {e}")
             return chunk
@@ -147,10 +189,7 @@ class DocumentProcessor:
             cache_data = {
                 "file_path": file_path,
                 "mtime": mtime,
-                "chunks": [ # 注意这里改为保存 chunks
-                    {"page_content": c.page_content, "metadata": c.metadata}
-                    for c in chunks
-                ]
+                "chunks": [{"page_content": c.page_content, "metadata": c.metadata} for c in chunks]
             }
             with open(cache_path, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, ensure_ascii=False, indent=2)
@@ -164,17 +203,14 @@ class DocumentProcessor:
             with open(cache_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             if data.get("mtime") != os.path.getmtime(file_path): return None
-            # 注意这里加载的是 chunks
             if "chunks" in data:
                  return [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in data["chunks"]]
-            return None # 旧版本缓存不兼容
+            return None
         except Exception:
             return None
 
     def process_directory(self, directory: str, generator=None) -> List[Document]:
-        """
-        处理目录，支持传入 generator 进行增强
-        """
+        """处理目录"""
         file_paths = []
         for ext in self.loader_mapping.keys():
             file_paths.extend(Path(directory).glob(f'**/*{ext}'))
@@ -185,25 +221,18 @@ class DocumentProcessor:
             return []
         
         final_chunks = []
-        
         for fp in file_paths:
-            # 1. 尝试从缓存加载 (此时缓存里已经是切分且增强过的 chunks)
             cached_chunks = self._load_cache(fp)
             if cached_chunks:
                 final_chunks.extend(cached_chunks)
                 print(f"🚀 从缓存加载Chunks: {os.path.basename(fp)}")
                 continue
             
-            # 2. 如果无缓存，则重新处理
             try:
-                # Load
                 docs = self._load_single_file(fp)
                 for doc in docs: doc.page_content = self.clean_text(doc.page_content)
-                
-                # Split
                 file_chunks = self.split_documents(docs)
                 
-                # Augment (如果提供了生成器)
                 if generator:
                     print(f"🤖 正在增强 {len(file_chunks)} 个切片 (此过程较慢)...")
                     augmented_chunks = []
@@ -214,10 +243,8 @@ class DocumentProcessor:
                     print(" 完成!")
                     file_chunks = augmented_chunks
                 
-                # Save chunks to cache
                 self._save_cache(fp, file_chunks)
                 final_chunks.extend(file_chunks)
-                
             except Exception as e:
                 print(f"✗ 处理失败: {fp}, {e}")
                 
