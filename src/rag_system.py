@@ -138,8 +138,12 @@ class RAGSystem:
         print(f"构建知识库: {document_dir}")
         print(f"{'='*50}\n")
         
-        # 1. 加载和处理文档
-        chunks = self.doc_processor.process_directory(document_dir)
+        # 1. 加载和处理文档 (传入 generator 以支持上下文增强)
+        # 注意: 这会显著增加索引构建时间，但提升检索效果
+        chunks = self.doc_processor.process_directory(
+            document_dir,
+            generator=self.generator
+        )
         
         if not chunks:
             print("警告: 没有文档可以处理")

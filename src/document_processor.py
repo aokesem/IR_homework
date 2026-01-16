@@ -1,11 +1,11 @@
 """
 文档处理模块
-负责加载、清洗和切分文档
+负责加载、清洗、切分文档及上下文增强
 """
 import os
 import json
 import time
-from typing import List, Dict
+from typing import List, Dict, Optional
 from pathlib import Path
 
 from langchain_community.document_loaders import (
@@ -17,25 +17,26 @@ from langchain_community.document_loaders import (
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
-
-
-
 class DocumentProcessor:
     """文档处理器"""
     
+    # 上下文增强 Prompt
+    CONTEXT_PROMPT = """请为以下文本片段生成一个简短的上下文说明（20-30字以内）。
+说明该片段来自文件《{filename}》，并概括其核心内容。
+格式要求：[关于{filename}的...说明]
+
+文本片段：
+{chunk_content}
+
+上下文说明："""
+
     def __init__(self, chunk_size: int = 512, chunk_overlap: int = 50, processed_dir: str = None):
-        """
-            chunk_size: 每个文档块的字符数
-            chunk_overlap: 块之间重叠的字符数
-            processed_dir: 缓存已解析文档的目录
-        """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.processed_dir = Path(processed_dir) if processed_dir else None
         if self.processed_dir:
             self.processed_dir.mkdir(parents=True, exist_ok=True)
         
-        # 初始化文本切分器
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -43,7 +44,6 @@ class DocumentProcessor:
             length_function=len,
         )
         
-        # 支持的文件格式映射
         self.loader_mapping = {
             '.txt': TextLoader,
             '.pdf': PyPDFLoader,
@@ -52,15 +52,7 @@ class DocumentProcessor:
         }
     
     def load_documents(self, file_paths: List[str]) -> List[Document]:
-        """
-        Args:
-            file_paths: 文件路径列表
-            
-        Returns:
-            文档列表
-        """
         documents = []
-        
         for file_path in file_paths:
             try:
                 docs = self._load_single_file(file_path)
@@ -68,80 +60,96 @@ class DocumentProcessor:
                 print(f"✓ 成功加载: {file_path} ({len(docs)} 个文档)")
             except Exception as e:
                 print(f"✗ 加载失败: {file_path}, 错误: {str(e)}")
-        
         return documents
     
     def _load_single_file(self, file_path: str) -> List[Document]:
-        """
-        Args:
-            file_path: 文件路径
-            
-        Returns:
-            文档列表
-        """
         file_ext = Path(file_path).suffix.lower()
-        
         if file_ext not in self.loader_mapping:
             raise ValueError(f"不支持的文件格式: {file_ext}")
         
         loader_class = self.loader_mapping[file_ext]
-        
-        # 特殊处理：PDF和文本文件使用UTF-8编码
         if file_ext == '.txt':
             loader = loader_class(file_path, encoding='utf-8')
         else:
             loader = loader_class(file_path)
         
         documents = loader.load()
-        
-        # 为每个文档添加元数据
         for doc in documents:
             doc.metadata['source'] = file_path
             doc.metadata['file_name'] = os.path.basename(file_path)
-        
         return documents
     
     def split_documents(self, documents: List[Document]) -> List[Document]:
-        """
-        Args:
-            documents: 文档列表
-            
-        Returns:
-            切分后的文档块列表
-        """
         chunks = self.text_splitter.split_documents(documents)
-        
-        # 为每个chunk添加索引
         for i, chunk in enumerate(chunks):
             chunk.metadata['chunk_id'] = i
-        
         print(f"文档切分完成: {len(documents)} 个文档 -> {len(chunks)} 个文档块")
-        
         return chunks
     
-    def _get_cache_path(self, file_path: str) -> Path:
-        """获取缓存文件路径"""
-        if not self.processed_dir:
-            return None
-        # 使用原文件名 + .json 作为缓存扩展名
-        rel_path = os.path.basename(file_path)
-        return self.processed_dir / f"{rel_path}.json"
+    def clean_text(self, text: str) -> str:
+        text = ' '.join(text.split())
+        return text.strip()
 
-    def _save_cache(self, file_path: str, documents: List[Document]):
-        """将解析后的文档保存到缓存"""
-        cache_path = self._get_cache_path(file_path)
-        if not cache_path:
-            return
+    def augment_chunk_with_context(self, chunk: Document, generator) -> Document:
+        """
+        使用 LLM 为 Chunk 生成上下文前缀
+        """
+        if not generator:
+            return chunk
             
+        filename = chunk.metadata.get('file_name', '未知文件')
+        content = chunk.page_content
+        
+        # 构造 Prompt
+        prompt = self.CONTEXT_PROMPT.format(
+            filename=filename,
+            chunk_content=content[:500]  # 限制长度以节省Token
+        )
+        
         try:
-            # 记录原始内容和修改时间以进行校验
+            # 调用生成器 (使用简单的生成模式，不做RAG)
+            # 这里我们需要直接访问底层接口或者使用一个特定的方法
+            # 假设 generator 有 _generate_hf 或类似的直接生成能力
+            # 为了通用，我们构造一个 dummy history 调用 generate
+            
+            result = generator.generate(
+                question=prompt,
+                context_documents=[], # 空上下文
+                history=[],
+                custom_prompt="{question}" # 直接透传
+            )
+            
+            context_desc = result['answer'].strip()
+            # 清理可能的括号
+            context_desc = context_desc.replace("上下文说明：", "").strip()
+            
+            # 拼接到原始内容前面
+            new_content = f"{context_desc}\n{content}"
+            chunk.page_content = new_content
+            chunk.metadata['is_augmented'] = True
+            
+            return chunk
+            
+        except Exception as e:
+            print(f"⚠️ 上下文增强失败: {e}")
+            return chunk
+
+    def _get_cache_path(self, file_path: str) -> Path:
+        if not self.processed_dir: return None
+        return self.processed_dir / f"{os.path.basename(file_path)}.json"
+
+    def _save_cache(self, file_path: str, chunks: List[Document]):
+        """保存处理后的Chunks到缓存"""
+        cache_path = self._get_cache_path(file_path)
+        if not cache_path: return
+        try:
             mtime = os.path.getmtime(file_path)
             cache_data = {
                 "file_path": file_path,
                 "mtime": mtime,
-                "documents": [
-                    {"page_content": doc.page_content, "metadata": doc.metadata}
-                    for doc in documents
+                "chunks": [ # 注意这里改为保存 chunks
+                    {"page_content": c.page_content, "metadata": c.metadata}
+                    for c in chunks
                 ]
             }
             with open(cache_path, 'w', encoding='utf-8') as f:
@@ -150,99 +158,70 @@ class DocumentProcessor:
             print(f"警告: 写入缓存失败 {file_path}: {e}")
 
     def _load_cache(self, file_path: str) -> List[Document]:
-        """从缓存加载文档"""
         cache_path = self._get_cache_path(file_path)
-        if not cache_path or not cache_path.exists():
-            return None
-            
+        if not cache_path or not cache_path.exists(): return None
         try:
             with open(cache_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
-            # 校验文件是否被修改过
-            if data.get("mtime") != os.path.getmtime(file_path):
-                return None
-                
-            documents = [
-                Document(page_content=d["page_content"], metadata=d["metadata"])
-                for d in data["documents"]
-            ]
-            return documents
+            if data.get("mtime") != os.path.getmtime(file_path): return None
+            # 注意这里加载的是 chunks
+            if "chunks" in data:
+                 return [Document(page_content=d["page_content"], metadata=d["metadata"]) for d in data["chunks"]]
+            return None # 旧版本缓存不兼容
         except Exception:
             return None
-    
-    def clean_text(self, text: str) -> str:
+
+    def process_directory(self, directory: str, generator=None) -> List[Document]:
         """
-        Args:
-            text: 原始文本
-            
-        Returns:
-            清洗后的文本
+        处理目录，支持传入 generator 进行增强
         """
-        # 移除多余的空白字符
-        text = ' '.join(text.split())
-        
-        
-        return text.strip()
-    
-    def process_directory(self, directory: str) -> List[Document]:
-        """
-        Args:
-            directory: 目录路径
-            
-        Returns:
-            处理后的文档块列表
-        """
-        # 收集所有支持的文件
         file_paths = []
         for ext in self.loader_mapping.keys():
             file_paths.extend(Path(directory).glob(f'**/*{ext}'))
-        
         file_paths = [str(fp) for fp in file_paths]
         
         if not file_paths:
-            print(f"警告: 在 {directory} 中未找到支持的文档")
+            print(f"警告: {directory} 为空")
             return []
         
-        print(f"找到 {len(file_paths)} 个文档文件")
+        final_chunks = []
         
-        # 加载文档（带有缓存逻辑）
-        documents = []
         for fp in file_paths:
-            # 尝试从缓存加载
-            cached_docs = self._load_cache(fp)
-            if cached_docs:
-                documents.extend(cached_docs)
-                print(f"🚀 从缓存加载: {os.path.basename(fp)}")
-            else:
-                # 正常解析
-                try:
-                    docs = self._load_single_file(fp)
-                    # 清洗文本
-                    for doc in docs:
-                        doc.page_content = self.clean_text(doc.page_content)
-                    
-                    documents.extend(docs)
-                    # 写入缓存
-                    self._save_cache(fp, docs)
-                    print(f"📂 解析新文件: {os.path.basename(fp)}")
-                except Exception as e:
-                    print(f"✗ 处理失败: {fp}, 错误: {str(e)}")
-        
-        # 统一进行文档切分
-        chunks = self.split_documents(documents)
-        
-        return chunks
-
+            # 1. 尝试从缓存加载 (此时缓存里已经是切分且增强过的 chunks)
+            cached_chunks = self._load_cache(fp)
+            if cached_chunks:
+                final_chunks.extend(cached_chunks)
+                print(f"🚀 从缓存加载Chunks: {os.path.basename(fp)}")
+                continue
+            
+            # 2. 如果无缓存，则重新处理
+            try:
+                # Load
+                docs = self._load_single_file(fp)
+                for doc in docs: doc.page_content = self.clean_text(doc.page_content)
+                
+                # Split
+                file_chunks = self.split_documents(docs)
+                
+                # Augment (如果提供了生成器)
+                if generator:
+                    print(f"🤖 正在增强 {len(file_chunks)} 个切片 (此过程较慢)...")
+                    augmented_chunks = []
+                    for chunk in file_chunks:
+                        aug_chunk = self.augment_chunk_with_context(chunk, generator)
+                        augmented_chunks.append(aug_chunk)
+                        print(".", end="", flush=True)
+                    print(" 完成!")
+                    file_chunks = augmented_chunks
+                
+                # Save chunks to cache
+                self._save_cache(fp, file_chunks)
+                final_chunks.extend(file_chunks)
+                
+            except Exception as e:
+                print(f"✗ 处理失败: {fp}, {e}")
+                
+        return final_chunks
 
 if __name__ == "__main__":
-    # 测试代码
-    processor = DocumentProcessor(chunk_size=512, chunk_overlap=50)
-    
-    # 测试处理目录
-    chunks = processor.process_directory("../data/raw")
-    
-    if chunks:
-        print(f"\n示例文档块:")
-        print(f"内容预览: {chunks[0].page_content[:200]}...")
-        print(f"元数据: {chunks[0].metadata}")
+    pass
