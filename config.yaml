@@ -7,6 +7,12 @@ models:
     name: "BAAI/bge-small-zh-v1.5"  
     device: "cuda" 
   
+  # Reranker模型 (重排序)
+  reranker:
+    name: "BAAI/bge-reranker-large"
+    device: "cuda"
+    enable: true
+  
   # LLM模型
   llm:
     provider: "huggingface"

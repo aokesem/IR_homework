@@ -50,13 +50,16 @@ class RAGSystem:
     
     def _init_retriever(self):
         """初始化检索器"""
-        model_config = self.config['models']['embedding']
+        embedding_config = self.config['models']['embedding']
+        rerank_config = self.config['models'].get('reranker', {})
         paths_config = self.config['paths']
         
         self.retriever = VectorRetriever(
-            embedding_model_name=model_config['name'],
-            device=model_config['device'],
+            embedding_model_name=embedding_config['name'],
+            device=embedding_config['device'],
             vector_store_path=paths_config['vector_store'],
+            reranker_name=rerank_config.get('name', 'BAAI/bge-reranker-base'),
+            enable_rerank=rerank_config.get('enable', True),
             dummy=self.dummy_mode
         )
     
