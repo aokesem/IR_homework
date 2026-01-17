@@ -73,7 +73,7 @@ class RAGSystem:
         llm_config = self.config['models']['llm']
         provider = llm_config.get('provider', 'huggingface')
         
-        # Determine model name based on provider default in config
+        # 1. 初始化主生成器 (用于对话)
         if provider == 'ollama':
             model_name = llm_config.get('ollama', {}).get('model', 'qwen2.5:7b')
         else:
@@ -89,24 +89,35 @@ class RAGSystem:
             provider=provider,
             ollama_url=llm_config.get('ollama', {}).get('base_url', "http://localhost:11434")
         )
+        
+        # 2. 初始化增强专用生成器 (DeepSeek API)
+        # 专门用于上下文增强，不参与对话
+        eval_api = self.config.get('evaluation', {}).get('api', {})
+        if eval_api and eval_api.get('api_key'):
+            print(f"正在初始化上下文增强专用模型: {eval_api.get('model')} (Remote API)")
+            self.aug_generator = LLMGenerator(
+                model_name=eval_api.get('model'),
+                provider="openai_api",
+                api_key=eval_api.get('api_key'),
+                base_url=eval_api.get('base_url'),
+                temperature=0.3, # 增强任务使用低温度更稳定
+                dummy=self.dummy_mode
+            )
+        else:
+            print("⚠️ 未配置评估API，上下文增强将回退使用主模型")
+            self.aug_generator = self.generator
     
     def reload_generator(self, model_name: str, provider: str) -> str:
         """
         重新加载生成器（切换模型）
-        
-        Args:
-            model_name: 新模型名称
-            provider: 提供商 ("huggingface" or "ollama")
-            
-        Returns:
-            状态消息
         """
         print(f"\n正在切换模型到: {model_name} ({provider})...")
         llm_config = self.config['models']['llm']
         
         try:
-            # Re-initialize generator
-            # Note: For HuggingFace, this might take time to load weights
+            # 这里的逻辑只影响主生成器
+            base_url = llm_config.get('ollama', {}).get('base_url', "http://localhost:11434")
+
             self.generator = LLMGenerator(
                 model_name=model_name,
                 device=llm_config['device'],
@@ -115,7 +126,7 @@ class RAGSystem:
                 temperature=llm_config['temperature'],
                 dummy=self.dummy_mode,
                 provider=provider,
-                ollama_url=llm_config.get('ollama', {}).get('base_url', "http://localhost:11434")
+                ollama_url=base_url
             )
             
             # Update config in memory
@@ -143,7 +154,6 @@ class RAGSystem:
         all_chunks = []
         
         # --- 第1轮：基础版 (Standard) ---
-        # 特点：普通切分，无增强，速度快
         print("\n=== 第1轮：构建基础版索引 (Baseline) ===")
         chunks_v1 = self.doc_processor.process_directory(
             document_dir,
@@ -155,16 +165,15 @@ class RAGSystem:
         all_chunks.extend(chunks_v1)
         
         # --- 第2轮：增强版 (Advanced) ---
-        # 特点：语义切分 + 上下文增强，效果好但构建慢
-        # 只有在初始化了Generator的情况下才跑这一轮
-        if self.generator:
+        # 使用专用 aug_generator 进行增强
+        if self.aug_generator:
             print("\n=== 第2轮：构建增强版索引 (Advanced) ===")
             chunks_v2 = self.doc_processor.process_directory(
                 document_dir,
-                generator=self.generator,
+                generator=self.aug_generator, # 使用DeepSeek
                 label=" [增强版]",
-                enable_semantic=True,  # 启用语义切分
-                enable_augmentation=True # 启用LLM增强
+                enable_semantic=True,
+                enable_augmentation=True
             )
             all_chunks.extend(chunks_v2)
         
@@ -172,7 +181,7 @@ class RAGSystem:
             print("警告: 没有文档可以处理")
             return
         
-        # 2. 构建向量索引 (一次性构建)
+        # 2. 构建向量索引
         self.retriever.build_index(all_chunks)
         
         # 3. 保存向量数据库
