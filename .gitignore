@@ -38,12 +38,11 @@ data/processed/*
 data/conversations/*
 !data/conversations/.gitkeep
 
-# 忽略本地构建的知识库
+# 忽略本地构建的知识库 (FAISS + BM25)
 vector_store/
-
-# 评测结果 (Ragas)
-*.csv
-evaluation/results/
+*.faiss
+*.index
+bm25.pkl
 
 # 忽略本地下载的大模型文件
 models/
@@ -51,18 +50,29 @@ models/
 *.pth
 *.pt
 *.gguf
+*.safetensors
+*.onnx
 
-# Logs
+# 评测结果与中间数据
+evaluation/eval_output.json
+evaluation/evaluation_results.csv
+evaluation/results/
+*.csv
+
+# Logs & Temporary
 *.log
 logs/
+tmp/
+temp/
+.cache/
 
-# IDE Settings
+# IDE & OS
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# System
 .DS_Store
 Thumbs.db
 desktop.ini
+$RECYCLE.BIN/
+

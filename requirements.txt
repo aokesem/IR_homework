@@ -1,39 +1,43 @@
 # 核心框架
-langchain==0.1.0
-langchain-community==0.0.13
-langchain-huggingface
-langchain-text-splitters
-langchain-openai
+langchain==1.2.4
+langchain-community==0.4.1
+langchain-core==1.2.5
+langchain-huggingface==1.2.0
+langchain-text-splitters==1.1.0
+langchain-openai==1.1.6
+langchain-experimental==0.4.1
 
 # 向量数据库和检索
 faiss-cpu==1.7.4
 sentence-transformers==2.3.1
-rank_bm25
-jieba
+rank_bm25==0.2.2
+jieba==0.42.1
 
 # 本地LLM推理
-transformers==4.36.2
-torch==2.1.2
-accelerate==0.25.0
-bitsandbytes==0.41.3  
-einops               
-tiktoken              
+# 注意: torch 通常建议根据 cuda 版本单独安装，此处仅作版本记录
+transformers==4.57.3
+torch>=2.1.0
+accelerate==1.12.0
+bitsandbytes==0.41.3
+einops
+tiktoken==0.12.0
 
 # 文档处理
 pypdf==4.0.1
 python-docx==1.1.0
+docx2txt==0.9
 unstructured==0.11.8
-docx2txt             
-python-magic-bin;
+# python-magic-bin; sys_platform == 'win32'
+python-magic
 
 # Web界面
 gradio==6.2.0
 
 # 工具库与评测
-numpy==1.24.3
+numpy==1.26.4
+pandas==2.3.2
 pyyaml==6.0.1
-tqdm==4.66.1
-requests            
-pandas               
-ragas
-datasets
+tqdm==4.67.1
+requests==2.32.5
+ragas==0.4.2
+datasets==4.3.0
